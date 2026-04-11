@@ -2,6 +2,8 @@
 
 ## Goal
 
+Achieve everything in https://github.com/jamylak/gruvbox-tmux but faster
+
 Build a tmux status system with the render hot path engineered for raw speed first:
 
 - no shell scripting in the hot path
