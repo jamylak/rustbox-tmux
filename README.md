@@ -6,7 +6,7 @@ Current subcommands:
 
 - `help`: print usage
 - `render`: print the current static status string
-- `daemon`: placeholder entrypoint; not implemented yet
+- `daemon`: publish the current status into a tmux user option
 
 ## Prerequisites
 
@@ -40,8 +40,17 @@ cargo run -- daemon
 
 Expected behavior:
 
-- exits successfully
-- prints `daemon mode is not implemented yet` to stderr
+- publishes `#[fg=green]rustbox-tmux bootstrap` into `@rustbox_status_right`
+- nudges tmux to redraw the initial status line once
+- stays alive as the long-lived daemon process
+
+## tmux Wiring
+
+Point `status-right` at the user option managed by the daemon:
+
+```tmux
+set -g status-right "#{@rustbox_status_right}"
+```
 
 ## Test It
 
@@ -51,7 +60,8 @@ Run the unit tests:
 cargo test
 ```
 
-The current tests only cover command parsing in `src/main.rs`.
+The current tests cover command parsing, tmux argument construction, and the
+static renderer output.
 
 ## Current Local Issue
 
