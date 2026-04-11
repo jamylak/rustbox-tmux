@@ -34,7 +34,8 @@ Build a tmux status system with the render hot path engineered for raw speed fir
 
 2. tmux integration layer
    - initial phase: small client prints current rendered string
-   - later phase: daemon updates a tmux user option or socket-fed client
+   - preferred final phase: daemon updates a tmux user option
+   - `status-right` reads `#{@rustbox_status_right}`
 
 3. widget engines
    - git: direct repository access
@@ -52,9 +53,9 @@ Build a tmux status system with the render hot path engineered for raw speed fir
    - Single-threaded event loop first.
    - Static rendered output.
 
-3. Add a cheap IPC path.
-   - Unix socket preferred.
-   - Client asks for the latest rendered string.
+3. Add the first daemon publication path.
+   - Prefer daemon-driven tmux `set-option` updates.
+   - Keep `status-right` on a tmux option, not live widget logic.
 
 4. Add renderer state model.
    - Preallocated string assembly where useful.
@@ -92,6 +93,8 @@ Build a tmux status system with the render hot path engineered for raw speed fir
 - On daemon start:
   - if a live daemon answers on the control socket, exit immediately
   - if the socket is stale, remove it and become the daemon
+- Preferred steady state: daemon publishes rendered output into a tmux user option.
+- `status-right` should read `#{@rustbox_status_right}` so redraws stay inside tmux.
 - Every new widget must define:
   - data source
   - refresh policy
@@ -101,10 +104,8 @@ Build a tmux status system with the render hot path engineered for raw speed fir
 ## Near-Term Next Session Work
 
 1. Implement a real `daemon` subcommand.
-2. Implement a real `render` subcommand backed by shared daemon state.
-3. Decide whether the first IPC should be:
-   - Unix domain socket
-   - lock-free shared file
+2. Add the first tmux publication path from the daemon.
+3. Wire tmux to `#{@rustbox_status_right}`.
 4. Keep the diff tiny.
    - One subsystem only.
    - No parallel feature work.
