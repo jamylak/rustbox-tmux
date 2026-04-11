@@ -87,6 +87,11 @@ Build a tmux status system with the render hot path engineered for raw speed fir
 - Avoid dynamic allocation churn where simple reuse works.
 - Avoid threads until measurement justifies them.
 - Prefer stable, predictable latency over bursty freshness.
+- Daemon startup must be idempotent in the Rust binary, not in tmux shell glue.
+- Use one well-known per-user control socket or lock path.
+- On daemon start:
+  - if a live daemon answers on the control socket, exit immediately
+  - if the socket is stale, remove it and become the daemon
 - Every new widget must define:
   - data source
   - refresh policy
