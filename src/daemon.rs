@@ -2,11 +2,12 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-const STATIC_STATUS: &str = "#[fg=green]rustbox-tmux bootstrap";
+use crate::render::render_status;
+
 const TMUX_STATUS_OPTION: &str = "@rustbox_status_right";
 
 pub fn run_daemon() -> Result<(), String> {
-    publish_to_tmux(STATIC_STATUS)?;
+    publish_to_tmux(render_status())?;
 
     // Force one initial status redraw so attached clients pick up the first
     // published value immediately. Steady-state updates should rely on tmux

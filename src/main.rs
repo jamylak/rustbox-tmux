@@ -1,9 +1,9 @@
 mod daemon;
+mod render;
 
 use std::env;
 use std::process::ExitCode;
-
-const STATIC_STATUS: &str = "#[fg=green]rustbox-tmux bootstrap";
+use crate::render::render_status;
 
 fn main() -> ExitCode {
     match parse_command(env::args()) {
@@ -19,7 +19,7 @@ fn main() -> ExitCode {
             }
         },
         Ok(Command::Render) => {
-            println!("{STATIC_STATUS}");
+            println!("{}", render_status());
             ExitCode::SUCCESS
         }
         Err(message) => {
