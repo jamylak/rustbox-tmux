@@ -1,3 +1,5 @@
+mod daemon;
+
 use std::env;
 use std::process::ExitCode;
 
@@ -9,10 +11,13 @@ fn main() -> ExitCode {
             print_help();
             ExitCode::SUCCESS
         }
-        Ok(Command::Daemon) => {
-            eprintln!("daemon mode is not implemented yet");
-            ExitCode::SUCCESS
-        }
+        Ok(Command::Daemon) => match daemon::run_daemon() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::from(1)
+            }
+        },
         Ok(Command::Render) => {
             println!("{STATIC_STATUS}");
             ExitCode::SUCCESS
