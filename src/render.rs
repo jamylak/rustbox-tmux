@@ -1,4 +1,7 @@
-const STATIC_STATUS: &str = "#[fg=green]rustbox-tmux bootstrap";
+const STATUS_SEPARATOR: &str = "#[fg=colour244] | ";
+const GIT_SECTION: &str = "#[fg=colour142]▒  main";
+const FORGE_SECTION: &str = "#[fg=colour214]▒  --";
+const METRICS_SECTION: &str = "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RenderState;
@@ -31,7 +34,17 @@ pub fn render_status(state: &RenderState, output: &mut String) {
 }
 
 fn append_status(_state: &RenderState, output: &mut String) {
-    output.push_str(STATIC_STATUS);
+    append_section(output, GIT_SECTION);
+    append_section(output, FORGE_SECTION);
+    append_section(output, METRICS_SECTION);
+}
+
+fn append_section(output: &mut String, section: &str) {
+    if !output.is_empty() {
+        output.push_str(STATUS_SEPARATOR);
+    }
+
+    output.push_str(section);
 }
 
 #[cfg(test)]
@@ -43,7 +56,10 @@ mod tests {
         let mut output = String::from("stale");
         render_status(&RenderState, &mut output);
 
-        assert_eq!(output, "#[fg=green]rustbox-tmux bootstrap");
+        assert_eq!(
+            output,
+            "#[fg=colour142]▒  main#[fg=colour244] | #[fg=colour214]▒  --#[fg=colour244] | #[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%"
+        );
     }
 
     #[test]
@@ -52,7 +68,10 @@ mod tests {
         let first_ptr = renderer.render().as_ptr();
         let second_ptr = renderer.render().as_ptr();
 
-        assert_eq!(renderer.render(), "#[fg=green]rustbox-tmux bootstrap");
+        assert_eq!(
+            renderer.render(),
+            "#[fg=colour142]▒  main#[fg=colour244] | #[fg=colour214]▒  --#[fg=colour244] | #[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%"
+        );
         assert_eq!(first_ptr, second_ptr);
     }
 }

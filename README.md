@@ -29,7 +29,7 @@ cargo run -- render
 Expected output:
 
 ```text
-#[fg=green]rustbox-tmux bootstrap
+#[fg=colour142]▒  main#[fg=colour244] | #[fg=colour214]▒  --#[fg=colour244] | #[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%
 ```
 
 Try the daemon entrypoint:
@@ -40,7 +40,7 @@ cargo run -- daemon
 
 Expected behavior:
 
-- publishes `#[fg=green]rustbox-tmux bootstrap` into `@rustbox_status_right`
+- publishes `#[fg=colour142]▒  main#[fg=colour244] | #[fg=colour214]▒  --#[fg=colour244] | #[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%` into `@rustbox_status_right`
 - nudges tmux to redraw the initial status line once
 - stays alive as the long-lived daemon process
 
