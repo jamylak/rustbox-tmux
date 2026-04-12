@@ -16,6 +16,10 @@ pub fn run_daemon() -> Result<(), String> {
     eprintln!("rustbox-tmuxd started");
     eprintln!("published initial status to {STATUS_OPTION}");
 
+    run_idle_loop();
+}
+
+fn run_idle_loop() -> ! {
     loop {
         thread::sleep(Duration::from_secs(60));
     }
