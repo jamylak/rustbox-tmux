@@ -22,7 +22,6 @@ impl Default for RenderState {
 
 #[derive(Debug, Default)]
 pub struct Renderer {
-    state: RenderState,
     output: String,
 }
 
@@ -31,15 +30,15 @@ impl Renderer {
         Self::default()
     }
 
-    pub fn render(&mut self) -> &str {
-        render_status(&self.state, &mut self.output);
+    pub fn render<'a>(&'a mut self, state: &RenderState) -> &'a str {
+        render_status(state, &mut self.output);
         self.output.as_str()
     }
 }
 
-pub fn render_to_stdout() {
+pub fn render_to_stdout(state: &RenderState) {
     let mut renderer = Renderer::new();
-    println!("{}", renderer.render());
+    println!("{}", renderer.render(state));
 }
 
 pub fn render_status(state: &RenderState, output: &mut String) {
@@ -82,12 +81,13 @@ mod tests {
 
     #[test]
     fn renderer_reuses_its_buffer() {
+        let state = RenderState::default();
         let mut renderer = Renderer::new();
-        let first_ptr = renderer.render().as_ptr();
-        let second_ptr = renderer.render().as_ptr();
+        let first_ptr = renderer.render(&state).as_ptr();
+        let second_ptr = renderer.render(&state).as_ptr();
 
         assert_eq!(
-            renderer.render(),
+            renderer.render(&state),
             "#[fg=colour142]▒  main#[fg=colour244] | #[fg=colour214]▒  --#[fg=colour244] | #[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%"
         );
         assert_eq!(first_ptr, second_ptr);
