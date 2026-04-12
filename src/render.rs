@@ -1,15 +1,26 @@
 const STATIC_STATUS: &str = "#[fg=green]rustbox-tmux bootstrap";
 
-pub fn render_status() -> &'static str {
-    STATIC_STATUS
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RenderState;
+
+pub fn render_status(state: &RenderState, output: &mut String) {
+    output.clear();
+    append_status(state, output);
+}
+
+fn append_status(_state: &RenderState, output: &mut String) {
+    output.push_str(STATIC_STATUS);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::render_status;
+    use super::{render_status, RenderState};
 
     #[test]
     fn renders_static_status() {
-        assert_eq!(render_status(), "#[fg=green]rustbox-tmux bootstrap");
+        let mut output = String::from("stale");
+        render_status(&RenderState, &mut output);
+
+        assert_eq!(output, "#[fg=green]rustbox-tmux bootstrap");
     }
 }

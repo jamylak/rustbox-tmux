@@ -1,9 +1,9 @@
 mod daemon;
 mod render;
 
+use crate::render::{render_status, RenderState};
 use std::env;
 use std::process::ExitCode;
-use crate::render::render_status;
 
 fn main() -> ExitCode {
     match parse_command(env::args()) {
@@ -19,7 +19,9 @@ fn main() -> ExitCode {
             }
         },
         Ok(Command::Render) => {
-            println!("{}", render_status());
+            let mut status = String::new();
+            render_status(&RenderState, &mut status);
+            println!("{status}");
             ExitCode::SUCCESS
         }
         Err(message) => {
