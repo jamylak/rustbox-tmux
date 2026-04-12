@@ -1,7 +1,7 @@
 const STATUS_SEPARATOR: &str = "#[fg=colour244] | ";
-const DEFAULT_GIT_SECTION: &str = "#[fg=colour142]▒  main";
-const DEFAULT_FORGE_SECTION: &str = "#[fg=colour214]▒  --";
-const DEFAULT_METRICS_SECTION: &str = "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%";
+pub const DEFAULT_GIT_SECTION: &str = "#[fg=colour142]▒  main";
+pub const DEFAULT_FORGE_SECTION: &str = "#[fg=colour214]▒  --";
+pub const DEFAULT_METRICS_SECTION: &str = "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderState {

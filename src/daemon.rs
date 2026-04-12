@@ -1,7 +1,9 @@
 use std::thread;
 use std::time::Duration;
 
-use crate::render::{RenderState, Renderer};
+use crate::render::{
+    RenderState, Renderer, DEFAULT_FORGE_SECTION, DEFAULT_GIT_SECTION, DEFAULT_METRICS_SECTION,
+};
 use crate::tmux::{publish_status, refresh_status_line, STATUS_OPTION};
 
 const IDLE_LOOP_SLEEP_SECS: u64 = 60;
@@ -30,15 +32,15 @@ fn build_render_state() -> RenderState {
 }
 
 fn build_git_section() -> &'static str {
-    RenderState::right_bar_stub().git_section
+    DEFAULT_GIT_SECTION
 }
 
 fn build_forge_section() -> &'static str {
-    RenderState::right_bar_stub().forge_section
+    DEFAULT_FORGE_SECTION
 }
 
 fn build_metrics_section() -> &'static str {
-    RenderState::right_bar_stub().metrics_section
+    DEFAULT_METRICS_SECTION
 }
 
 fn log_startup() {
