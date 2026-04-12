@@ -7,7 +7,7 @@ use crate::tmux::{publish_status, refresh_status_line, STATUS_OPTION};
 const IDLE_LOOP_SLEEP_SECS: u64 = 60;
 
 pub fn run_daemon() -> Result<(), String> {
-    let state = RenderState::default();
+    let state = RenderState::right_bar_stub();
     let mut renderer = Renderer::new();
     publish_status(renderer.render(&state))?;
 

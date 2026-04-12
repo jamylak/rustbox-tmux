@@ -10,13 +10,19 @@ pub struct RenderState {
     pub metrics_section: &'static str,
 }
 
-impl Default for RenderState {
-    fn default() -> Self {
+impl RenderState {
+    pub fn right_bar_stub() -> Self {
         Self {
             git_section: DEFAULT_GIT_SECTION,
             forge_section: DEFAULT_FORGE_SECTION,
             metrics_section: DEFAULT_METRICS_SECTION,
         }
+    }
+}
+
+impl Default for RenderState {
+    fn default() -> Self {
+        Self::right_bar_stub()
     }
 }
 
@@ -71,7 +77,7 @@ mod tests {
     #[test]
     fn renders_static_status() {
         let mut output = String::from("stale");
-        render_status(&RenderState::default(), &mut output);
+        render_status(&RenderState::right_bar_stub(), &mut output);
 
         assert_eq!(
             output,
@@ -81,7 +87,7 @@ mod tests {
 
     #[test]
     fn renderer_reuses_its_buffer() {
-        let state = RenderState::default();
+        let state = RenderState::right_bar_stub();
         let mut renderer = Renderer::new();
         let first_ptr = renderer.render(&state).as_ptr();
         let second_ptr = renderer.render(&state).as_ptr();

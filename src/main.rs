@@ -20,7 +20,7 @@ fn main() -> ExitCode {
             }
         },
         Ok(Command::Render) => {
-            render_to_stdout(&RenderState::default());
+            render_to_stdout(&RenderState::right_bar_stub());
             ExitCode::SUCCESS
         }
         Err(message) => {
