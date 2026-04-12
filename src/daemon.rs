@@ -22,7 +22,23 @@ pub fn run_daemon() -> Result<(), String> {
 }
 
 fn build_render_state() -> RenderState {
-    RenderState::right_bar_stub()
+    RenderState {
+        git_section: build_git_section(),
+        forge_section: build_forge_section(),
+        metrics_section: build_metrics_section(),
+    }
+}
+
+fn build_git_section() -> &'static str {
+    RenderState::right_bar_stub().git_section
+}
+
+fn build_forge_section() -> &'static str {
+    RenderState::right_bar_stub().forge_section
+}
+
+fn build_metrics_section() -> &'static str {
+    RenderState::right_bar_stub().metrics_section
 }
 
 fn log_startup() {
