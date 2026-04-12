@@ -2,13 +2,13 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use crate::render::{render_status, RenderState};
+use crate::render::render_current_status;
 
 const TMUX_STATUS_OPTION: &str = "@rustbox_status_right";
 
 pub fn run_daemon() -> Result<(), String> {
     let mut status = String::new();
-    render_status(&RenderState, &mut status);
+    render_current_status(&mut status);
     publish_to_tmux(&status)?;
 
     // Force one initial status redraw so attached clients pick up the first
