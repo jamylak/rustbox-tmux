@@ -15,10 +15,14 @@ pub fn run_daemon() -> Result<(), String> {
     // redrawing `#{@rustbox_status_right}` on its normal cadence.
     refresh_status_line()?;
 
-    eprintln!("rustbox-tmuxd started");
-    eprintln!("published initial status to {STATUS_OPTION}");
+    log_startup();
 
     run_idle_loop();
+}
+
+fn log_startup() {
+    eprintln!("rustbox-tmuxd started");
+    eprintln!("published initial status to {STATUS_OPTION}");
 }
 
 fn run_idle_loop() -> ! {
