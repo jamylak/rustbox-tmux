@@ -4,6 +4,8 @@ use std::time::Duration;
 use crate::render::Renderer;
 use crate::tmux::{publish_status, refresh_status_line, STATUS_OPTION};
 
+const IDLE_LOOP_SLEEP_SECS: u64 = 60;
+
 pub fn run_daemon() -> Result<(), String> {
     let mut renderer = Renderer::new();
     publish_status(renderer.render())?;
@@ -21,6 +23,6 @@ pub fn run_daemon() -> Result<(), String> {
 
 fn run_idle_loop() -> ! {
     loop {
-        thread::sleep(Duration::from_secs(60));
+        thread::sleep(Duration::from_secs(IDLE_LOOP_SLEEP_SECS));
     }
 }
