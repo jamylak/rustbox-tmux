@@ -1,5 +1,6 @@
 mod daemon;
 mod render;
+mod tmux;
 
 use crate::render::Renderer;
 use std::env;
