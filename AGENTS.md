@@ -2,6 +2,7 @@
 
 ## Commit Style
 
+- Group commits by logical groups of changes
 - Prefer colourful, high-signal commit subjects when they fit the change.
 - Emojis are encouraged when they add meaning instead of noise.
 - Commit bodies should read well in Markdown:

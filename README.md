@@ -62,13 +62,3 @@ cargo test
 
 The current tests cover command parsing, tmux argument construction, and the
 static renderer output.
-
-## Current Local Issue
-
-On this machine, the project does not currently build because the installed Rust toolchain is broken before crate compilation starts. `cargo run` and `cargo test` both fail while invoking `rustc -vV` with a dynamic linker error caused by a Rust/LLVM mismatch:
-
-```text
-dyld: Symbol not found ... librustc_driver ... libLLVM.dylib
-```
-
-Until that toolchain issue is fixed, the commands above are the right way to run and test the project, but they will fail locally before executing this crate.

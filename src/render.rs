@@ -3,8 +3,21 @@ const STATIC_STATUS: &str = "#[fg=green]rustbox-tmux bootstrap";
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RenderState;
 
-pub fn render_current_status(output: &mut String) {
-    render_status(&RenderState, output);
+#[derive(Debug, Default)]
+pub struct Renderer {
+    state: RenderState,
+    output: String,
+}
+
+impl Renderer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn render(&mut self) -> &str {
+        render_status(&self.state, &mut self.output);
+        self.output.as_str()
+    }
 }
 
 pub fn render_status(state: &RenderState, output: &mut String) {
@@ -18,7 +31,7 @@ fn append_status(_state: &RenderState, output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_current_status, render_status, RenderState};
+    use super::{render_status, RenderState, Renderer};
 
     #[test]
     fn renders_static_status() {
@@ -29,10 +42,12 @@ mod tests {
     }
 
     #[test]
-    fn renders_current_status() {
-        let mut output = String::new();
-        render_current_status(&mut output);
+    fn renderer_reuses_its_buffer() {
+        let mut renderer = Renderer::new();
+        let first_ptr = renderer.render().as_ptr();
+        let second_ptr = renderer.render().as_ptr();
 
-        assert_eq!(output, "#[fg=green]rustbox-tmux bootstrap");
+        assert_eq!(renderer.render(), "#[fg=green]rustbox-tmux bootstrap");
+        assert_eq!(first_ptr, second_ptr);
     }
 }

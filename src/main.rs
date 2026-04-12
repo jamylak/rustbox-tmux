@@ -1,7 +1,7 @@
 mod daemon;
 mod render;
 
-use crate::render::render_current_status;
+use crate::render::Renderer;
 use std::env;
 use std::process::ExitCode;
 
@@ -19,9 +19,8 @@ fn main() -> ExitCode {
             }
         },
         Ok(Command::Render) => {
-            let mut status = String::new();
-            render_current_status(&mut status);
-            println!("{status}");
+            let mut renderer = Renderer::new();
+            println!("{}", renderer.render());
             ExitCode::SUCCESS
         }
         Err(message) => {
