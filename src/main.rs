@@ -2,7 +2,7 @@ mod daemon;
 mod render;
 mod tmux;
 
-use crate::render::Renderer;
+use crate::render::render_to_stdout;
 use std::env;
 use std::process::ExitCode;
 
@@ -20,8 +20,7 @@ fn main() -> ExitCode {
             }
         },
         Ok(Command::Render) => {
-            let mut renderer = Renderer::new();
-            println!("{}", renderer.render());
+            render_to_stdout();
             ExitCode::SUCCESS
         }
         Err(message) => {

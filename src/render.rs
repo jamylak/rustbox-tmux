@@ -20,6 +20,11 @@ impl Renderer {
     }
 }
 
+pub fn render_to_stdout() {
+    let mut renderer = Renderer::new();
+    println!("{}", renderer.render());
+}
+
 pub fn render_status(state: &RenderState, output: &mut String) {
     output.clear();
     append_status(state, output);
