@@ -2,9 +2,52 @@
 
 ## Goal
 
-Achieve everything in https://github.com/jamylak/gruvbox-tmux but faster
+Recreate the jamylak `gruvbox-tmux` plugin experience, but with a faster
+architecture and a cleaner long-term data path.
 
-Build a tmux status system with the render hot path engineered for raw speed first:
+The end result should look and feel like the original plugin:
+
+- a polished tmux status line, not a generic debug bar
+- the same overall widget mix and day-to-day usefulness as the original plugin
+- support custom icons for selected processes and contexts
+- fast steady-state redraws driven by precomputed state
+- tiny reviewable diffs while the implementation grows toward parity
+
+## Target Plugin Shape
+
+The plugin should present as a complete tmux theme/status plugin rather than a
+single technical widget.
+
+At a high level, the finished plugin should include:
+
+- a left/right status layout that feels recognizably aligned with the original plugin
+- cohesive separators, spacing, colors, and section ordering
+- support for custom per-process icons where that improves the status display
+- a mix of always-visible local system state plus repository-aware context
+- optional forge/network-backed context that refreshes in the background
+- graceful degradation when data sources are unavailable
+
+The status line should be built from concrete sections such as:
+
+- session and tmux context
+- system metrics
+  - CPU / load style summary
+  - memory summary
+- local git state
+  - branch
+  - dirty state
+  - counts
+  - ahead / behind
+- forge state later
+  - PR / MR summary
+  - review state
+  - CI state
+
+The exact ordering and formatting can evolve, but the final result should read
+like a polished daily-driver status line with the same general surface area as
+the original plugin.
+
+Build that tmux status system with the render hot path engineered for raw speed:
 
 - no shell scripting in the hot path
 - no `git`, `gh`, `glab`, `jq`, `top`, `vm_stat`, `pmset`, or `free` subprocesses in the hot path
@@ -14,7 +57,7 @@ Build a tmux status system with the render hot path engineered for raw speed fir
 
 ## Non-Goals For Early Iterations
 
-- feature parity with the Bash plugin
+- full feature parity on day one
 - portability beyond macOS/Linux
 - pretty abstractions before the data path is correct
 - background network integrations before local-state performance is solid
@@ -42,8 +85,29 @@ Build a tmux status system with the render hot path engineered for raw speed fir
 3. widget engines
    - git: direct repository access
    - metrics: direct OS sampling
-   - battery: direct OS integration
    - forge: direct HTTP clients and cached auth-aware polling
+
+## Planned Widget Inventory
+
+These are the main plugin sections we expect to add over time:
+
+- tmux/session context
+  - custom icons for selected processes or tools when relevant
+- metrics
+  - CPU or load summary
+  - memory summary
+- local git
+  - branch
+  - dirty state
+  - counts
+  - ahead / behind
+- forge
+  - pull request or merge request summary
+  - review status
+  - CI status
+
+Not every section needs to land immediately, but the plan should keep moving
+toward this overall plugin surface.
 
 ## Tiny-Diff Roadmap
 
@@ -51,38 +115,48 @@ Build a tmux status system with the render hot path engineered for raw speed fir
    - Minimal binary with subcommands.
    - No dependencies unless required.
 
-2. Add a daemon skeleton.
+2. Add a daemon skeleton and basic tmux publication path.
    - Single-threaded event loop first.
    - Static rendered output.
+   - `status-right` reads daemon-owned state.
 
-3. Add the first daemon publication path.
-   - Prefer daemon-driven tmux `set-option` updates.
-   - Keep `status-right` on a tmux option, not live widget logic.
-
-4. Add renderer state model.
+3. Add renderer state model.
    - Preallocated string assembly where useful.
    - No widget work in the client.
 
-5. Add metrics widget with direct integration only.
+4. Get the feel of the plugin right before chasing parity.
+   - Land the basic layout and composition path first.
+   - Make the status line feel like a real plugin, not scaffolding.
+   - Prefer placeholder-backed sections over premature heavy integrations.
+   - Establish the section ordering and visual rhythm of the final plugin.
+
+5. Add the quickest low-risk widgets first.
+   - Prefer local state with simple direct reads.
+   - Validate spacing, separators, truncation, and update flow.
+   - Start filling in the planned widget inventory from the easiest wins upward.
+
+6. Add metrics widget with direct integration only.
    - Linux: `/proc`.
    - macOS: native APIs if required.
-
-6. Add battery widget with direct integration only.
-   - Linux: `/sys/class/power_supply`.
-   - macOS: IOKit / power APIs.
 
 7. Add local git widget with no shell-outs.
    - Start with branch and dirty state.
    - Then counts.
    - Then ahead/behind.
+   - Treat this as an early performance-critical widget, not a shell-out placeholder.
 
-8. Add tmux wiring.
-   - Small integration snippet.
-   - Measure redraw cost.
-
-9. Add forge widget later.
+8. Add forge widget later.
    - Direct GitHub/GitLab APIs.
    - Strict background refresh only.
+
+9. Expand toward broader parity with the original plugin.
+   - Fill in the remaining useful widgets one by one.
+   - Keep the final shape recognizably aligned with the original plugin.
+
+10. Optional long-term polish.
+   - Consider a short session startup animation.
+   - Keep it optional and bounded, for example a first ~3 second sequence.
+   - Never let animation compromise steady-state redraw cost.
 
 ## Performance Rules
 
@@ -105,14 +179,21 @@ Build a tmux status system with the render hot path engineered for raw speed fir
 
 ## Near-Term Next Session Work
 
-1. Implement a real `daemon` subcommand.
-2. Add the first tmux publication path from the daemon.
-3. Wire tmux to `#{@rustbox_status_right}`.
+1. Keep tightening the renderer and daemon data path.
+2. Make the basic status line shape feel intentional.
+3. Add the next easiest useful widget with a direct integration.
 4. Keep the diff tiny.
    - One subsystem only.
    - No parallel feature work.
 
 ## Notes
 
-- Local `rustc` is currently broken on this machine, so initial scaffolding may not compile until the toolchain is repaired.
-- That does not change the architecture direction.
+- The target is not merely "a fast tmux status line"; it is a fast reimplementation
+  of the original plugin's experience.
+- Short-term delivery order matters:
+  - first make the plugin feel real
+  - then land the fastest low-risk widgets
+  - then tackle heavier git and metrics work
+- Long-term polish can exist, but only after the core plugin is already useful.
+  - Custom icons are part of the intended surface.
+  - Startup animation is optional future polish.
