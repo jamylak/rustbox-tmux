@@ -54,6 +54,10 @@ fn append_status(state: &RenderState, output: &mut String) {
 }
 
 fn append_section(output: &mut String, section: &str) {
+    if section.is_empty() {
+        return;
+    }
+
     if !output.is_empty() {
         output.push_str(STATUS_SEPARATOR);
     }
@@ -101,5 +105,19 @@ mod tests {
         render_status(&state, &mut output);
 
         assert_eq!(output, "git#[fg=colour244] | forge#[fg=colour244] | metrics");
+    }
+
+    #[test]
+    fn skips_empty_sections_without_extra_separators() {
+        let state = RenderState {
+            git_section: "git",
+            forge_section: "",
+            metrics_section: "metrics",
+        };
+        let mut output = String::new();
+
+        render_status(&state, &mut output);
+
+        assert_eq!(output, "git#[fg=colour244] | metrics");
     }
 }
