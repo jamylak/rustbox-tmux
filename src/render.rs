@@ -1,29 +1,10 @@
 const STATUS_SEPARATOR: &str = "#[fg=colour244] | ";
-pub const DEFAULT_GIT_SECTION: &str = "#[fg=colour142]▒  main";
-pub const DEFAULT_FORGE_SECTION: &str = "#[fg=colour214]▒  --";
-pub const DEFAULT_METRICS_SECTION: &str = "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderState {
     pub git_section: &'static str,
     pub forge_section: &'static str,
     pub metrics_section: &'static str,
-}
-
-impl RenderState {
-    pub fn right_bar_stub() -> Self {
-        Self {
-            git_section: DEFAULT_GIT_SECTION,
-            forge_section: DEFAULT_FORGE_SECTION,
-            metrics_section: DEFAULT_METRICS_SECTION,
-        }
-    }
-}
-
-impl Default for RenderState {
-    fn default() -> Self {
-        Self::right_bar_stub()
-    }
 }
 
 #[derive(Debug, Default)]
@@ -77,7 +58,14 @@ mod tests {
     #[test]
     fn renders_static_status() {
         let mut output = String::from("stale");
-        render_status(&RenderState::right_bar_stub(), &mut output);
+        render_status(
+            &RenderState {
+                git_section: "#[fg=colour142]▒  main",
+                forge_section: "#[fg=colour214]▒  --",
+                metrics_section: "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%",
+            },
+            &mut output,
+        );
 
         assert_eq!(
             output,
@@ -87,7 +75,11 @@ mod tests {
 
     #[test]
     fn renderer_reuses_its_buffer() {
-        let state = RenderState::right_bar_stub();
+        let state = RenderState {
+            git_section: "#[fg=colour142]▒  main",
+            forge_section: "#[fg=colour214]▒  --",
+            metrics_section: "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%",
+        };
         let mut renderer = Renderer::new();
         let first_ptr = renderer.render(&state).as_ptr();
         let second_ptr = renderer.render(&state).as_ptr();

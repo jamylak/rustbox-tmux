@@ -10,7 +10,7 @@ const FORGE_SECTION_STUB: &str = "#[fg=colour214]▒  --";
 const METRICS_SECTION_STUB: &str = "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%";
 
 pub fn run_daemon() -> Result<(), String> {
-    let state = build_render_state();
+    let state = current_render_state();
     let mut renderer = Renderer::new();
     publish_status(renderer.render(&state))?;
 
@@ -24,7 +24,7 @@ pub fn run_daemon() -> Result<(), String> {
     run_idle_loop();
 }
 
-fn build_render_state() -> RenderState {
+pub fn current_render_state() -> RenderState {
     RenderState {
         git_section: build_git_section(),
         forge_section: build_forge_section(),
@@ -57,11 +57,11 @@ fn run_idle_loop() -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_render_state, FORGE_SECTION_STUB, GIT_SECTION_STUB, METRICS_SECTION_STUB};
+    use super::{current_render_state, FORGE_SECTION_STUB, GIT_SECTION_STUB, METRICS_SECTION_STUB};
 
     #[test]
     fn builds_render_state_from_current_sections() {
-        let state = build_render_state();
+        let state = current_render_state();
 
         assert_eq!(state.git_section, GIT_SECTION_STUB);
         assert_eq!(state.forge_section, FORGE_SECTION_STUB);

@@ -2,7 +2,7 @@ mod daemon;
 mod render;
 mod tmux;
 
-use crate::render::{render_to_stdout, RenderState};
+use crate::render::render_to_stdout;
 use std::env;
 use std::process::ExitCode;
 
@@ -20,7 +20,7 @@ fn main() -> ExitCode {
             }
         },
         Ok(Command::Render) => {
-            render_to_stdout(&RenderState::right_bar_stub());
+            render_to_stdout(&daemon::current_render_state());
             ExitCode::SUCCESS
         }
         Err(message) => {
