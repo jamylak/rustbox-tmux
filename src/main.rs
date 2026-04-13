@@ -1,6 +1,7 @@
 mod daemon;
 mod render;
 mod tmux;
+mod widgets;
 
 use crate::render::render_to_stdout;
 use std::env;

@@ -3,12 +3,9 @@ use std::time::Duration;
 
 use crate::render::{RenderState, Renderer};
 use crate::tmux::{publish_status, refresh_status_line, STATUS_OPTION};
+use crate::widgets::{forge_section, git_section, metrics_section};
 
 const IDLE_LOOP_SLEEP_SECS: u64 = 60;
-const GIT_SECTION_STUB: &str = "#[fg=colour142]▒  main";
-const FORGE_SECTION_STUB: &str = "#[fg=colour214]▒  --";
-const METRICS_SECTION_STUB: &str = "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%";
-const SHOW_FORGE_SECTION: bool = false;
 
 pub fn run_daemon() -> Result<(), String> {
     let state = current_render_state();
@@ -27,26 +24,10 @@ pub fn run_daemon() -> Result<(), String> {
 
 pub fn current_render_state() -> RenderState {
     RenderState {
-        git_section: build_git_section(),
-        forge_section: build_forge_section(),
-        metrics_section: build_metrics_section(),
+        git_section: git_section(),
+        forge_section: forge_section(),
+        metrics_section: metrics_section(),
     }
-}
-
-fn build_git_section() -> &'static str {
-    GIT_SECTION_STUB
-}
-
-fn build_forge_section() -> &'static str {
-    if SHOW_FORGE_SECTION {
-        FORGE_SECTION_STUB
-    } else {
-        ""
-    }
-}
-
-fn build_metrics_section() -> &'static str {
-    METRICS_SECTION_STUB
 }
 
 fn log_startup() {
@@ -62,19 +43,15 @@ fn run_idle_loop() -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{current_render_state, GIT_SECTION_STUB, METRICS_SECTION_STUB, SHOW_FORGE_SECTION, FORGE_SECTION_STUB};
+    use super::current_render_state;
+    use crate::widgets::{forge_section, git_section, metrics_section};
 
     #[test]
     fn builds_render_state_from_current_sections() {
         let state = current_render_state();
 
-        assert_eq!(state.git_section, GIT_SECTION_STUB);
-        assert_eq!(state.metrics_section, METRICS_SECTION_STUB);
-
-        if SHOW_FORGE_SECTION {
-            assert_eq!(state.forge_section, FORGE_SECTION_STUB);
-        } else {
-            assert_eq!(state.forge_section, "");
-        }
+        assert_eq!(state.git_section, git_section());
+        assert_eq!(state.forge_section, forge_section());
+        assert_eq!(state.metrics_section, metrics_section());
     }
 }
