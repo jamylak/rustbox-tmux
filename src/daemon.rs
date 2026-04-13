@@ -53,3 +53,17 @@ fn run_idle_loop() -> ! {
         thread::sleep(Duration::from_secs(IDLE_LOOP_SLEEP_SECS));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{build_render_state, DEFAULT_FORGE_SECTION, DEFAULT_GIT_SECTION, DEFAULT_METRICS_SECTION};
+
+    #[test]
+    fn builds_render_state_from_current_sections() {
+        let state = build_render_state();
+
+        assert_eq!(state.git_section, DEFAULT_GIT_SECTION);
+        assert_eq!(state.forge_section, DEFAULT_FORGE_SECTION);
+        assert_eq!(state.metrics_section, DEFAULT_METRICS_SECTION);
+    }
+}
