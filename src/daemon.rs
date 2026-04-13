@@ -1,12 +1,13 @@
 use std::thread;
 use std::time::Duration;
 
-use crate::render::{
-    RenderState, Renderer, DEFAULT_FORGE_SECTION, DEFAULT_GIT_SECTION, DEFAULT_METRICS_SECTION,
-};
+use crate::render::{RenderState, Renderer};
 use crate::tmux::{publish_status, refresh_status_line, STATUS_OPTION};
 
 const IDLE_LOOP_SLEEP_SECS: u64 = 60;
+const GIT_SECTION_STUB: &str = "#[fg=colour142]▒  main";
+const FORGE_SECTION_STUB: &str = "#[fg=colour214]▒  --";
+const METRICS_SECTION_STUB: &str = "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%";
 
 pub fn run_daemon() -> Result<(), String> {
     let state = build_render_state();
@@ -32,15 +33,15 @@ fn build_render_state() -> RenderState {
 }
 
 fn build_git_section() -> &'static str {
-    DEFAULT_GIT_SECTION
+    GIT_SECTION_STUB
 }
 
 fn build_forge_section() -> &'static str {
-    DEFAULT_FORGE_SECTION
+    FORGE_SECTION_STUB
 }
 
 fn build_metrics_section() -> &'static str {
-    DEFAULT_METRICS_SECTION
+    METRICS_SECTION_STUB
 }
 
 fn log_startup() {
@@ -56,14 +57,14 @@ fn run_idle_loop() -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_render_state, DEFAULT_FORGE_SECTION, DEFAULT_GIT_SECTION, DEFAULT_METRICS_SECTION};
+    use super::{build_render_state, FORGE_SECTION_STUB, GIT_SECTION_STUB, METRICS_SECTION_STUB};
 
     #[test]
     fn builds_render_state_from_current_sections() {
         let state = build_render_state();
 
-        assert_eq!(state.git_section, DEFAULT_GIT_SECTION);
-        assert_eq!(state.forge_section, DEFAULT_FORGE_SECTION);
-        assert_eq!(state.metrics_section, DEFAULT_METRICS_SECTION);
+        assert_eq!(state.git_section, GIT_SECTION_STUB);
+        assert_eq!(state.forge_section, FORGE_SECTION_STUB);
+        assert_eq!(state.metrics_section, METRICS_SECTION_STUB);
     }
 }
