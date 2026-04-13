@@ -8,6 +8,7 @@ const IDLE_LOOP_SLEEP_SECS: u64 = 60;
 const GIT_SECTION_STUB: &str = "#[fg=colour142]▒  main";
 const FORGE_SECTION_STUB: &str = "#[fg=colour214]▒  --";
 const METRICS_SECTION_STUB: &str = "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%";
+const SHOW_FORGE_SECTION: bool = false;
 
 pub fn run_daemon() -> Result<(), String> {
     let state = current_render_state();
@@ -37,7 +38,11 @@ fn build_git_section() -> &'static str {
 }
 
 fn build_forge_section() -> &'static str {
-    FORGE_SECTION_STUB
+    if SHOW_FORGE_SECTION {
+        FORGE_SECTION_STUB
+    } else {
+        ""
+    }
 }
 
 fn build_metrics_section() -> &'static str {
@@ -57,14 +62,19 @@ fn run_idle_loop() -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{current_render_state, FORGE_SECTION_STUB, GIT_SECTION_STUB, METRICS_SECTION_STUB};
+    use super::{current_render_state, GIT_SECTION_STUB, METRICS_SECTION_STUB, SHOW_FORGE_SECTION, FORGE_SECTION_STUB};
 
     #[test]
     fn builds_render_state_from_current_sections() {
         let state = current_render_state();
 
         assert_eq!(state.git_section, GIT_SECTION_STUB);
-        assert_eq!(state.forge_section, FORGE_SECTION_STUB);
         assert_eq!(state.metrics_section, METRICS_SECTION_STUB);
+
+        if SHOW_FORGE_SECTION {
+            assert_eq!(state.forge_section, FORGE_SECTION_STUB);
+        } else {
+            assert_eq!(state.forge_section, "");
+        }
     }
 }
