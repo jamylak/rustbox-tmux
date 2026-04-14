@@ -137,7 +137,8 @@ toward this overall plugin surface.
 
 6. Add metrics widget with direct integration only.
    - Linux: `/proc`.
-   - macOS: native APIs if required.
+   - macOS: stage 1 may use command-backed collection to get real numbers on screen quickly.
+   - Replace macOS command spawning with direct/native or daemon-cached collection later.
 
 7. Add local git widget with no shell-outs.
    - Start with branch and dirty state.
@@ -176,6 +177,9 @@ toward this overall plugin surface.
   - refresh policy
   - invalidation policy
   - worst-case latency impact
+- Current optimization note:
+  - Linux metrics can stay on direct `/proc` reads.
+  - macOS metrics currently need an explicit follow-up to remove command-backed collection from the long-term path.
 
 ## Near-Term Next Session Work
 
