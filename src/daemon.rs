@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::render::{RenderState, Renderer};
 use crate::tmux::{publish_status, refresh_status_line, STATUS_OPTION};
-use crate::widgets::{forge_section, git_section, metrics_section_string};
+use crate::widgets::{forge_section, git_section_string, metrics_section_string};
 
 const IDLE_LOOP_SLEEP_SECS: u64 = 60;
 
@@ -24,7 +24,7 @@ pub fn run_daemon() -> Result<(), String> {
 
 pub fn current_render_state() -> RenderState {
     RenderState {
-        git_section: git_section().to_string(),
+        git_section: git_section_string(),
         forge_section: forge_section().to_string(),
         metrics_section: metrics_section_string(),
     }
@@ -44,13 +44,13 @@ fn run_idle_loop() -> ! {
 #[cfg(test)]
 mod tests {
     use super::current_render_state;
-    use crate::widgets::{forge_section, git_section, metrics_section_string};
+    use crate::widgets::{forge_section, git_section_string, metrics_section_string};
 
     #[test]
     fn builds_render_state_from_current_sections() {
         let state = current_render_state();
 
-        assert_eq!(state.git_section, git_section());
+        assert_eq!(state.git_section, git_section_string());
         assert_eq!(state.forge_section, forge_section());
         assert_eq!(state.metrics_section, metrics_section_string());
     }

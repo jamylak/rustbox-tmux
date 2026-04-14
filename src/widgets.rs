@@ -1,12 +1,24 @@
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 const GIT_SECTION_STUB: &str = "#[fg=colour142]▒  main";
 const FORGE_SECTION_STUB: &str = "#[fg=colour214]▒  --";
 const SHOW_FORGE_SECTION: bool = false;
 
-pub fn git_section() -> &'static str {
-    GIT_SECTION_STUB
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitSnapshot {
+    pub branch: String,
+    pub changed_count: u32,
+    pub insertions_count: u32,
+    pub deletions_count: u32,
+    pub untracked_count: u32,
+}
+
+pub fn git_section_string() -> String {
+    current_git_snapshot()
+        .map(format_git_section)
+        .unwrap_or_else(|| GIT_SECTION_STUB.to_string())
 }
 
 pub fn forge_section() -> &'static str {
@@ -28,6 +40,60 @@ pub fn metrics_section_string() -> String {
     format!(
         "#[fg=colour109]▒ 🧠 {cpu}% #[fg=colour108]💾 {ram}%"
     )
+}
+
+pub fn current_git_snapshot() -> Option<GitSnapshot> {
+    let repo_root = command_output("git", &["rev-parse", "--show-toplevel"])?;
+    let repo_root = repo_root.trim();
+    if repo_root.is_empty() {
+        return None;
+    }
+
+    let branch = command_output_in_dir(repo_root, "git", &["branch", "--show-current"])?;
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return None;
+    }
+
+    let diff_numstat = command_output_in_dir(repo_root, "git", &["diff", "--numstat"])?;
+    let (changed_count, insertions_count, deletions_count) = parse_diff_numstat(&diff_numstat);
+
+    let untracked_output = command_output_in_dir(
+        repo_root,
+        "git",
+        &["ls-files", "--other", "--directory", "--exclude-standard"],
+    )?;
+    let untracked_count = untracked_output.lines().filter(|line| !line.trim().is_empty()).count() as u32;
+
+    Some(GitSnapshot {
+        branch: truncate_branch(branch),
+        changed_count,
+        insertions_count,
+        deletions_count,
+        untracked_count,
+    })
+}
+
+pub fn format_git_section(snapshot: GitSnapshot) -> String {
+    let mut section = format!("#[fg=colour142]▒  {}", snapshot.branch);
+
+    if snapshot.changed_count > 0 {
+        section.push_str(&format!(" #[fg=colour214] {}", snapshot.changed_count));
+    }
+
+    if snapshot.insertions_count > 0 {
+        section.push_str(&format!(" #[fg=colour107] {}", snapshot.insertions_count));
+    }
+
+    if snapshot.deletions_count > 0 {
+        section.push_str(&format!(" #[fg=colour167] {}", snapshot.deletions_count));
+    }
+
+    if snapshot.untracked_count > 0 {
+        section.push_str(&format!(" #[fg=colour223] {}", snapshot.untracked_count));
+    }
+
+    section
 }
 
 pub fn cpu_percent() -> Option<u8> {
@@ -110,6 +176,19 @@ fn command_output(program: &str, args: &[&str]) -> Option<String> {
     String::from_utf8(output.stdout).ok()
 }
 
+fn command_output_in_dir(dir: impl AsRef<Path>, program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program)
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout).ok()
+}
+
 fn meminfo_value_kib(meminfo: &str, key: &str) -> Option<u64> {
     let line = meminfo.lines().find(|line| line.starts_with(key))?;
     line.split_whitespace().nth(1)?.parse().ok()
@@ -130,6 +209,42 @@ fn parse_vm_stat_count(vm_stat_output: &str, label: &str) -> Option<u64> {
     value.parse().ok()
 }
 
+fn parse_diff_numstat(diff_numstat: &str) -> (u32, u32, u32) {
+    let mut changed = 0;
+    let mut insertions = 0;
+    let mut deletions = 0;
+
+    for line in diff_numstat.lines() {
+        let mut fields = line.split_whitespace();
+        let added = fields.next();
+        let removed = fields.next();
+        let path = fields.next();
+
+        if added.is_none() || removed.is_none() || path.is_none() {
+            continue;
+        }
+
+        changed += 1;
+        insertions += added.and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
+        deletions += removed.and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
+    }
+
+    (changed, insertions, deletions)
+}
+
+fn truncate_branch(branch: &str) -> String {
+    const MAX_BRANCH_LEN: usize = 25;
+
+    let mut chars = branch.chars();
+    let truncated: String = chars.by_ref().take(MAX_BRANCH_LEN).collect();
+
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
 fn percent_from_used_total(used: u64, total: u64) -> Option<u8> {
     if total == 0 {
         return None;
@@ -146,14 +261,15 @@ fn clamp_percent(value: i64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_percent, forge_section, git_section, meminfo_value_kib, metrics_section,
-        metrics_section_string, parse_vm_stat_count, parse_vm_stat_page_size,
-        percent_from_used_total, FORGE_SECTION_STUB, GIT_SECTION_STUB, SHOW_FORGE_SECTION,
+        clamp_percent, forge_section, format_git_section, git_section_string, meminfo_value_kib,
+        metrics_section, metrics_section_string, parse_diff_numstat, parse_vm_stat_count,
+        parse_vm_stat_page_size, percent_from_used_total, truncate_branch, GitSnapshot,
+        FORGE_SECTION_STUB, SHOW_FORGE_SECTION,
     };
 
     #[test]
     fn builds_current_widget_sections() {
-        assert_eq!(git_section(), GIT_SECTION_STUB);
+        assert!(!git_section_string().is_empty());
         assert_eq!(metrics_section(), "");
         assert!(metrics_section_string().contains("🧠"));
         assert!(metrics_section_string().contains("💾"));
@@ -188,5 +304,37 @@ mod tests {
         assert_eq!(percent_from_used_total(0, 0), None);
         assert_eq!(clamp_percent(101), 100);
         assert_eq!(clamp_percent(-5), 0);
+    }
+
+    #[test]
+    fn parses_git_diff_numstat() {
+        let sample = "10\t2\tsrc/lib.rs\n3\t0\tREADME.md\n";
+
+        assert_eq!(parse_diff_numstat(sample), (2, 13, 2));
+    }
+
+    #[test]
+    fn truncates_long_branch_names() {
+        assert_eq!(truncate_branch("short-branch"), "short-branch");
+        assert_eq!(
+            truncate_branch("this-is-a-very-long-branch-name"),
+            "this-is-a-very-long-branc…"
+        );
+    }
+
+    #[test]
+    fn formats_git_snapshot() {
+        let snapshot = GitSnapshot {
+            branch: "main".to_string(),
+            changed_count: 2,
+            insertions_count: 5,
+            deletions_count: 1,
+            untracked_count: 3,
+        };
+
+        assert_eq!(
+            format_git_section(snapshot),
+            "#[fg=colour142]▒  main #[fg=colour214] 2 #[fg=colour107] 5 #[fg=colour167] 1 #[fg=colour223] 3"
+        );
     }
 }
