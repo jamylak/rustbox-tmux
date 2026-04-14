@@ -1,10 +1,10 @@
 const STATUS_SEPARATOR: &str = "#[fg=colour244] | ";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderState {
-    pub git_section: &'static str,
-    pub forge_section: &'static str,
-    pub metrics_section: &'static str,
+    pub git_section: String,
+    pub forge_section: String,
+    pub metrics_section: String,
 }
 
 #[derive(Debug, Default)]
@@ -34,9 +34,9 @@ pub fn render_status(state: &RenderState, output: &mut String) {
 }
 
 fn append_status(state: &RenderState, output: &mut String) {
-    append_section(output, state.git_section);
-    append_section(output, state.forge_section);
-    append_section(output, state.metrics_section);
+    append_section(output, &state.git_section);
+    append_section(output, &state.forge_section);
+    append_section(output, &state.metrics_section);
 }
 
 fn append_section(output: &mut String, section: &str) {
@@ -60,9 +60,9 @@ mod tests {
         let mut output = String::from("stale");
         render_status(
             &RenderState {
-                git_section: "#[fg=colour142]▒  main",
-                forge_section: "#[fg=colour214]▒  --",
-                metrics_section: "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%",
+                git_section: "#[fg=colour142]▒  main".to_string(),
+                forge_section: "#[fg=colour214]▒  --".to_string(),
+                metrics_section: "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%".to_string(),
             },
             &mut output,
         );
@@ -76,9 +76,9 @@ mod tests {
     #[test]
     fn renderer_reuses_its_buffer() {
         let state = RenderState {
-            git_section: "#[fg=colour142]▒  main",
-            forge_section: "#[fg=colour214]▒  --",
-            metrics_section: "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%",
+            git_section: "#[fg=colour142]▒  main".to_string(),
+            forge_section: "#[fg=colour214]▒  --".to_string(),
+            metrics_section: "#[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%".to_string(),
         };
         let mut renderer = Renderer::new();
         let first_ptr = renderer.render(&state).as_ptr();
@@ -94,9 +94,9 @@ mod tests {
     #[test]
     fn renders_sections_from_state() {
         let state = RenderState {
-            git_section: "git",
-            forge_section: "forge",
-            metrics_section: "metrics",
+            git_section: "git".to_string(),
+            forge_section: "forge".to_string(),
+            metrics_section: "metrics".to_string(),
         };
         let mut output = String::new();
 
@@ -108,9 +108,9 @@ mod tests {
     #[test]
     fn skips_empty_sections_without_extra_separators() {
         let state = RenderState {
-            git_section: "git",
-            forge_section: "",
-            metrics_section: "metrics",
+            git_section: "git".to_string(),
+            forge_section: "".to_string(),
+            metrics_section: "metrics".to_string(),
         };
         let mut output = String::new();
 
