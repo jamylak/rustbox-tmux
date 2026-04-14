@@ -1,6 +1,15 @@
 # rustbox-tmux
 
-Minimal Rust bootstrap for a tmux status system.
+🚧 Work-in-progress Rust port of `jamylak/gruvbox-tmux`, which is itself a fork
+of [motaz-shokry/gruvbox-tmux](https://gitlab.com/motaz-shokry/gruvbox-tmux).
+
+The goal is to keep the same main user-facing interface and overall plugin
+shape as `jamylak/gruvbox-tmux`, but move the implementation toward one
+long-lived daemon with precomputed state instead of lots of shell and subshell
+work in the hot path.
+
+This repo is not feature-complete yet. It is an active port with the renderer,
+daemon, metrics, and git slices being brought over step by step.
 
 Current subcommands:
 
