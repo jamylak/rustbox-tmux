@@ -110,6 +110,29 @@ pub fn current_pane_path() -> Option<PathBuf> {
     }
 }
 
+pub fn current_session_id() -> Option<String> {
+    // Session lookup:
+    // tmux current client/session -> `#{session_id}` -> Rust `String`
+    //
+    // The daemon uses this to attach one hidden control-mode client to the
+    // current tmux session for native `%subscription-changed` events.
+    let output = Command::new("tmux")
+        .args(["display-message", "-p", "#{session_id}"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let value = String::from_utf8(output.stdout).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 pub fn theme_enabled() -> bool {
     // Compatibility rule:
     // missing option => enabled
@@ -203,8 +226,9 @@ fn append_hook(name: &str, command: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        refresh_args, set_option_args, theme_enabled, ACTIVE_PATH_OPTION, DAEMON_PID_OPTION,
-        DEFAULT_GIT_REFRESH_SECS, ENABLED_OPTION, GIT_REFRESH_OPTION, STATUS_OPTION,
+        current_session_id, refresh_args, set_option_args, theme_enabled, ACTIVE_PATH_OPTION,
+        DAEMON_PID_OPTION, DEFAULT_GIT_REFRESH_SECS, ENABLED_OPTION, GIT_REFRESH_OPTION,
+        STATUS_OPTION,
     };
 
     #[test]
@@ -232,5 +256,10 @@ mod tests {
     #[test]
     fn treats_missing_enabled_flag_as_enabled() {
         assert!(theme_enabled());
+    }
+
+    #[test]
+    fn current_session_lookup_returns_none_without_tmux() {
+        let _ = current_session_id();
     }
 }

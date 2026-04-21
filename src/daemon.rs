@@ -1,19 +1,23 @@
 use std::env;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::render::{RenderState, Renderer};
 use crate::tmux::{
-    current_pane_path, disable_theme, publish_status, refresh_status_line, set_option, show_option,
-    theme_enabled, ACTIVE_PATH_OPTION, DAEMON_PID_OPTION, DEFAULT_GIT_REFRESH_SECS,
-    GIT_REFRESH_OPTION, STATUS_OPTION,
+    current_pane_path, current_session_id, disable_theme, publish_status, refresh_status_line,
+    set_option, show_option, theme_enabled, ACTIVE_PATH_OPTION, DAEMON_PID_OPTION,
+    DEFAULT_GIT_REFRESH_SECS, GIT_REFRESH_OPTION, STATUS_OPTION,
 };
 use crate::widgets::{forge_section, git_section_string, metrics_section_string};
 
 const METRICS_REFRESH_SECS: u64 = 5;
 const MIN_GIT_REFRESH_SECS: u64 = 5;
+const PATH_SUBSCRIPTION_NAME: &str = "path";
+const PATH_SUBSCRIPTION_FORMAT: &str = "path:%*:#{pane_id} #{pane_current_path}";
 
 // Replace the previous daemon on `init` so config reloads pick up a rebuilt
 // binary instead of leaving an old process running forever.
@@ -109,21 +113,38 @@ fn log_startup() {
 }
 
 // Background loop:
-// - wake every 5s for metrics freshness
+// - wait up to 5s for a tmux-native pane-path subscription event
+// - publish immediately when tmux reports a pane cwd change
+// - otherwise publish on the 5s cadence for metrics freshness
 // - reuse the cached git section unless the repo changed or the git-specific
 //   refresh interval has expired
 fn run_idle_loop(mut state: DaemonState) -> ! {
+    let mut path_subscription = PathSubscription::attach();
+
     loop {
         // Let `rustbox-tmux stop` shut the daemon down cleanly even if the
         // explicit SIGTERM race-misses and the process survives until the next
         // wake-up.
         if !theme_enabled() {
+            drop(path_subscription);
             let _ = set_option(DAEMON_PID_OPTION, "");
             std::process::exit(0);
         }
 
-        thread::sleep(Duration::from_secs(METRICS_REFRESH_SECS));
-        let _ = publish_with_daemon_state(None, &mut state);
+        match path_subscription.as_ref().map(|subscription| {
+            subscription.wait_for_change(Duration::from_secs(METRICS_REFRESH_SECS))
+        }) {
+            Some(Ok(PathEvent::Changed)) | Some(Err(RecvTimeoutError::Timeout)) => {
+                let _ = publish_with_daemon_state(None, &mut state);
+            }
+            Some(Err(RecvTimeoutError::Disconnected)) => {
+                path_subscription = PathSubscription::attach();
+            }
+            None => {
+                thread::sleep(Duration::from_secs(METRICS_REFRESH_SECS));
+                let _ = publish_with_daemon_state(None, &mut state);
+            }
+        }
     }
 }
 
@@ -244,6 +265,79 @@ impl DaemonState {
     }
 }
 
+enum PathEvent {
+    Changed,
+}
+
+struct PathSubscription {
+    child: Child,
+    _stdin: ChildStdin,
+    events: Receiver<PathEvent>,
+}
+
+impl PathSubscription {
+    // Native tmux path watcher 🎯
+    //
+    // daemon
+    //   -> open one hidden control-mode client on the current session
+    //   -> subscribe to `%*` pane path changes
+    //   -> tmux emits `%subscription-changed` when a pane cwd changes
+    //   -> wake the daemon immediately instead of polling `tmux` every second
+    fn attach() -> Option<Self> {
+        let session_id = current_session_id()?;
+        let mut child = Command::new("tmux")
+            .args([
+                "-C",
+                "attach-session",
+                "-t",
+                &session_id,
+                "-f",
+                "no-output,ignore-size,read-only",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+
+        let mut stdin = child.stdin.take()?;
+        writeln!(stdin, "refresh-client -B \"{PATH_SUBSCRIPTION_FORMAT}\"").ok()?;
+        stdin.flush().ok()?;
+
+        let stdout = child.stdout.take()?;
+        let (sender, receiver) = mpsc::channel();
+
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if line.starts_with(&format!("%subscription-changed {PATH_SUBSCRIPTION_NAME} ")) {
+                    let _ = sender.send(PathEvent::Changed);
+                }
+            }
+        });
+
+        Some(Self {
+            child,
+            _stdin: stdin,
+            events: receiver,
+        })
+    }
+
+    fn wait_for_change(&self, timeout: Duration) -> Result<PathEvent, RecvTimeoutError> {
+        self.events.recv_timeout(timeout)
+    }
+}
+
+impl Drop for PathSubscription {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 struct GitSectionCache {
     repo_path: Option<PathBuf>,
     section: String,
@@ -284,7 +378,7 @@ impl GitSectionCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{current_render_state, DaemonState};
+    use super::{current_render_state, DaemonState, PATH_SUBSCRIPTION_FORMAT};
     use crate::widgets::{forge_section, git_section_string};
     use std::path::Path;
     use std::time::{Duration, Instant};
@@ -324,6 +418,14 @@ mod tests {
         assert_eq!(
             state.git_cache.section_for(Some(Path::new("/tmp/demo"))),
             "cached"
+        );
+    }
+
+    #[test]
+    fn path_subscription_targets_all_panes() {
+        assert_eq!(
+            PATH_SUBSCRIPTION_FORMAT,
+            "path:%*:#{pane_id} #{pane_current_path}"
         );
     }
 }
