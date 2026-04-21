@@ -152,7 +152,7 @@ fn print_help() {
     println!("    rustbox-tmux <SUBCOMMAND> [OPTIONS]");
     println!();
     println!("SUBCOMMANDS:");
-    println!("    init      Configure tmux status-right, publish once, and ensure the updater is running");
+    println!("    init      Configure tmux status-right, publish once, and replace/start the updater");
     println!("    daemon    Start the long-lived status daemon");
     println!("    render    Print the current rendered status string");
     println!("    publish   Publish the current rendered status into tmux");

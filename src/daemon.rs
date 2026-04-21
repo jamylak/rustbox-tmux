@@ -2,26 +2,29 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::render::{RenderState, Renderer};
 use crate::tmux::{
     current_pane_path, publish_status, refresh_status_line, set_option, show_option,
-    ACTIVE_PATH_OPTION, DAEMON_PID_OPTION, STATUS_OPTION,
+    ACTIVE_PATH_OPTION, DAEMON_PID_OPTION, DEFAULT_GIT_REFRESH_SECS, GIT_REFRESH_OPTION,
+    STATUS_OPTION,
 };
 use crate::widgets::{forge_section, git_section_string, metrics_section_string};
 
-const IDLE_LOOP_SLEEP_SECS: u64 = 5;
+const METRICS_REFRESH_SECS: u64 = 5;
+const MIN_GIT_REFRESH_SECS: u64 = 5;
 
-// Reuse an existing updater when tmux reloads config instead of spawning one
-// daemon per `run-shell`.
+// Replace the previous daemon on `init` so config reloads pick up a rebuilt
+// binary instead of leaving an old process running forever.
 pub fn ensure_daemon(binary_path: &Path) -> Result<(), String> {
     if let Some(pid) = show_option(DAEMON_PID_OPTION).and_then(|value| value.parse::<u32>().ok()) {
-        if process_is_running(pid) {
-            return Ok(());
+        if process_is_running(pid) && process_is_our_daemon(pid, binary_path) {
+            stop_process(pid)?;
         }
     }
 
+    set_option(DAEMON_PID_OPTION, "")?;
     Command::new(binary_path)
         .arg("daemon")
         .stdin(Stdio::null())
@@ -34,12 +37,13 @@ pub fn ensure_daemon(binary_path: &Path) -> Result<(), String> {
 }
 
 pub fn run_daemon() -> Result<(), String> {
+    let mut state = DaemonState::new(git_refresh_interval_secs());
     set_option(DAEMON_PID_OPTION, &std::process::id().to_string())?;
-    publish_once(None)?;
+    publish_with_daemon_state(None, &mut state)?;
 
     log_startup();
 
-    run_idle_loop();
+    run_idle_loop(state);
 }
 
 // Publish one snapshot now and remember the resolved path so the background
@@ -59,8 +63,12 @@ pub fn publish_once(path: Option<&Path>) -> Result<(), String> {
 }
 
 pub fn current_render_state(path: Option<&Path>) -> RenderState {
+    current_render_state_with_git_section(git_section_string(path))
+}
+
+fn current_render_state_with_git_section(git_section: String) -> RenderState {
     RenderState {
-        git_section: git_section_string(path),
+        git_section,
         forge_section: forge_section().to_string(),
         metrics_section: metrics_section_string(),
     }
@@ -71,10 +79,14 @@ fn log_startup() {
     eprintln!("published initial status to {STATUS_OPTION}");
 }
 
-fn run_idle_loop() -> ! {
+// Background loop:
+// - wake every 5s for metrics freshness
+// - reuse the cached git section unless the repo changed or the git-specific
+//   refresh interval has expired
+fn run_idle_loop(mut state: DaemonState) -> ! {
     loop {
-        thread::sleep(Duration::from_secs(IDLE_LOOP_SLEEP_SECS));
-        let _ = publish_once(None);
+        thread::sleep(Duration::from_secs(METRICS_REFRESH_SECS));
+        let _ = publish_with_daemon_state(None, &mut state);
     }
 }
 
@@ -89,6 +101,30 @@ fn resolve_render_path(path: Option<&Path>) -> Option<PathBuf> {
 
 fn active_path() -> Option<PathBuf> {
     show_option(ACTIVE_PATH_OPTION).map(PathBuf::from)
+}
+
+fn publish_with_daemon_state(path: Option<&Path>, state: &mut DaemonState) -> Result<(), String> {
+    let resolved_path = resolve_render_path(path);
+    if let Some(path) = resolved_path.as_deref() {
+        set_option(ACTIVE_PATH_OPTION, &path.to_string_lossy())?;
+    }
+
+    let git_section = state.git_cache.section_for(resolved_path.as_deref());
+    let render_state = current_render_state_with_git_section(git_section);
+    let mut renderer = Renderer::new();
+    publish_status(renderer.render(&render_state))?;
+    refresh_status_line()?;
+
+    Ok(())
+}
+
+fn git_refresh_interval_secs() -> u64 {
+    // Keep git on its own slower cadence than metrics so the daemon can stay
+    // responsive without shelling out to `git` every 5 seconds forever.
+    show_option(GIT_REFRESH_OPTION)
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|value| value.max(MIN_GIT_REFRESH_SECS))
+        .unwrap_or(DEFAULT_GIT_REFRESH_SECS)
 }
 
 // `kill -0` is a liveness probe, not a termination signal.
@@ -108,10 +144,102 @@ fn process_is_running(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+fn process_is_our_daemon(pid: u32, binary_path: &Path) -> bool {
+    let Some(binary_path) = binary_path.to_str() else {
+        return false;
+    };
+    let output = Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok();
+    let Some(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|command| command.contains(binary_path) && command.contains(" daemon"))
+        .unwrap_or(false)
+}
+
+fn stop_process(pid: u32) -> Result<(), String> {
+    let status = Command::new("kill")
+        .arg(pid.to_string())
+        .status()
+        .map_err(|error| format!("failed to stop old rustbox daemon {pid}: {error}"))?;
+    if !status.success() {
+        return Err(format!("failed to stop old rustbox daemon {pid}: {status}"));
+    }
+
+    for _ in 0..20 {
+        if !process_is_running(pid) {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    Err(format!("old rustbox daemon {pid} did not exit after SIGTERM"))
+}
+
+struct DaemonState {
+    git_cache: GitSectionCache,
+}
+
+impl DaemonState {
+    fn new(git_refresh_secs: u64) -> Self {
+        Self {
+            git_cache: GitSectionCache::new(Duration::from_secs(git_refresh_secs)),
+        }
+    }
+}
+
+struct GitSectionCache {
+    repo_path: Option<PathBuf>,
+    section: String,
+    refreshed_at: Option<Instant>,
+    refresh_interval: Duration,
+}
+
+impl GitSectionCache {
+    fn new(refresh_interval: Duration) -> Self {
+        Self {
+            repo_path: None,
+            section: String::new(),
+            refreshed_at: None,
+            refresh_interval,
+        }
+    }
+
+    // Git cache flow:
+    // path changed            -> refresh now
+    // same path + interval ok -> reuse cached section
+    // same path + stale       -> refresh now
+    fn section_for(&mut self, path: Option<&Path>) -> String {
+        let path_changed = self.repo_path.as_deref() != path;
+        let refresh_due = self
+            .refreshed_at
+            .map(|instant| instant.elapsed() >= self.refresh_interval)
+            .unwrap_or(true);
+
+        if path_changed || refresh_due {
+            self.repo_path = path.map(Path::to_path_buf);
+            self.section = git_section_string(path);
+            self.refreshed_at = Some(Instant::now());
+        }
+
+        self.section.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::current_render_state;
+    use super::{current_render_state, DaemonState};
     use crate::widgets::{forge_section, git_section_string};
+    use std::path::Path;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn builds_render_state_from_current_sections() {
@@ -121,5 +249,27 @@ mod tests {
         assert_eq!(state.forge_section, forge_section());
         assert!(state.metrics_section.contains("🧠"));
         assert!(state.metrics_section.contains("💾"));
+    }
+
+    #[test]
+    fn refreshes_git_cache_when_repo_changes() {
+        let mut state = DaemonState::new(30);
+        let first = state.git_cache.section_for(Some(Path::new("/tmp/one")));
+        let second = state.git_cache.section_for(Some(Path::new("/tmp/two")));
+
+        assert_eq!(first, "");
+        assert_eq!(second, "");
+        assert_eq!(state.git_cache.repo_path.as_deref(), Some(Path::new("/tmp/two")));
+    }
+
+    #[test]
+    fn keeps_git_cache_until_interval_expires() {
+        let mut state = DaemonState::new(30);
+        state.git_cache.repo_path = Some(Path::new("/tmp/demo").to_path_buf());
+        state.git_cache.section = "cached".to_string();
+        state.git_cache.refreshed_at = Some(Instant::now());
+        state.git_cache.refresh_interval = Duration::from_secs(30);
+
+        assert_eq!(state.git_cache.section_for(Some(Path::new("/tmp/demo"))), "cached");
     }
 }

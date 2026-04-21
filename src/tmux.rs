@@ -4,6 +4,8 @@ use std::process::Command;
 pub const STATUS_OPTION: &str = "@rustbox_status_right";
 pub const ACTIVE_PATH_OPTION: &str = "@rustbox_active_path";
 pub const DAEMON_PID_OPTION: &str = "@rustbox_daemon_pid";
+pub const GIT_REFRESH_OPTION: &str = "@rustbox_git_refresh_seconds";
+pub const DEFAULT_GIT_REFRESH_SECS: u64 = 30;
 const HOOKS_INSTALLED_OPTION: &str = "@rustbox_hooks_installed";
 
 pub fn publish_status(status: &str) -> Result<(), String> {
@@ -114,6 +116,9 @@ pub fn current_pane_path() -> Option<PathBuf> {
 pub fn configure_theme(binary_path: &str) -> Result<(), String> {
     set_option("status-right", "#{@rustbox_status_right}")?;
     set_option("status-right-length", "160")?;
+    if show_option(GIT_REFRESH_OPTION).is_none() {
+        set_option(GIT_REFRESH_OPTION, &DEFAULT_GIT_REFRESH_SECS.to_string())?;
+    }
 
     // Guard hook installation so re-sourcing tmux config does not duplicate
     // the same `run-shell ... publish` hook entries.
@@ -156,7 +161,10 @@ fn append_hook(name: &str, command: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{refresh_args, set_option_args, ACTIVE_PATH_OPTION, DAEMON_PID_OPTION, STATUS_OPTION};
+    use super::{
+        refresh_args, set_option_args, ACTIVE_PATH_OPTION, DAEMON_PID_OPTION,
+        DEFAULT_GIT_REFRESH_SECS, GIT_REFRESH_OPTION, STATUS_OPTION,
+    };
 
     #[test]
     fn builds_tmux_set_option_args() {
@@ -175,5 +183,7 @@ mod tests {
         assert_eq!(STATUS_OPTION, "@rustbox_status_right");
         assert_eq!(ACTIVE_PATH_OPTION, "@rustbox_active_path");
         assert_eq!(DAEMON_PID_OPTION, "@rustbox_daemon_pid");
+        assert_eq!(GIT_REFRESH_OPTION, "@rustbox_git_refresh_seconds");
+        assert_eq!(DEFAULT_GIT_REFRESH_SECS, 30);
     }
 }
