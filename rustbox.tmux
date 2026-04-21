@@ -4,6 +4,7 @@ set -eu
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BINARY_PATH="${RUSTBOX_TMUX_BIN:-${CURRENT_DIR}/target/release/rustbox-tmux}"
+ACTION="${1:-init}"
 
 # Startup/reload flow:
 # tmux `run-shell rustbox.tmux`
@@ -42,10 +43,30 @@ binary_needs_build() {
     return 1
 }
 
-if binary_needs_build; then
-    cargo build --quiet --release --manifest-path "${CURRENT_DIR}/Cargo.toml"
+case "${ACTION}" in
+    init)
+        if binary_needs_build; then
+            cargo build --quiet --release --manifest-path "${CURRENT_DIR}/Cargo.toml"
+        fi
+        ;;
+    stop)
+        # `stop` is the teardown path, so do not trigger a rebuild just to
+        # disable the current tmux server.
+        ;;
+    *)
+        echo "usage: rustbox.tmux [init|stop]" >&2
+        exit 2
+        ;;
+esac
+
+if [[ ! -x "${BINARY_PATH}" ]]; then
+    echo "rustbox-tmux binary not found at ${BINARY_PATH}" >&2
+    exit 1
 fi
 
-# `init` configures tmux once, publishes one status value, and makes sure the
-# background updater exists. Hooks then call the compiled binary directly.
-"${BINARY_PATH}" init
+# Loader handoff:
+# `init`
+#   -> configure tmux, publish once, replace/start daemon
+# `stop`
+#   -> disable rustbox in the current tmux server and stop its daemon
+"${BINARY_PATH}" "${ACTION}"

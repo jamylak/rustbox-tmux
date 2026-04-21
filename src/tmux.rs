@@ -5,6 +5,7 @@ pub const STATUS_OPTION: &str = "@rustbox_status_right";
 pub const ACTIVE_PATH_OPTION: &str = "@rustbox_active_path";
 pub const DAEMON_PID_OPTION: &str = "@rustbox_daemon_pid";
 pub const GIT_REFRESH_OPTION: &str = "@rustbox_git_refresh_seconds";
+pub const ENABLED_OPTION: &str = "@rustbox_enabled";
 pub const DEFAULT_GIT_REFRESH_SECS: u64 = 30;
 const HOOKS_INSTALLED_OPTION: &str = "@rustbox_hooks_installed";
 
@@ -55,7 +56,9 @@ pub fn set_option(name: &str, value: &str) -> Result<(), String> {
     if status.success() {
         Ok(())
     } else {
-        Err(format!("tmux set-option for {name} exited with status {status}"))
+        Err(format!(
+            "tmux set-option for {name} exited with status {status}"
+        ))
     }
 }
 
@@ -107,6 +110,18 @@ pub fn current_pane_path() -> Option<PathBuf> {
     }
 }
 
+pub fn theme_enabled() -> bool {
+    // Compatibility rule:
+    // missing option => enabled
+    //
+    // That keeps old installs working, while `stop` can flip the option to `0`
+    // and turn future hook-driven `publish` calls into no-ops.
+    !matches!(
+        show_option(ENABLED_OPTION).as_deref(),
+        Some("0") | Some("false") | Some("off")
+    )
+}
+
 // Minimal tmux setup for the current Rust status-right feature set only.
 //
 // Result:
@@ -116,6 +131,7 @@ pub fn current_pane_path() -> Option<PathBuf> {
 pub fn configure_theme(binary_path: &str) -> Result<(), String> {
     set_option("status-right", "#{@rustbox_status_right}")?;
     set_option("status-right-length", "160")?;
+    set_option(ENABLED_OPTION, "1")?;
     if show_option(GIT_REFRESH_OPTION).is_none() {
         set_option(GIT_REFRESH_OPTION, &DEFAULT_GIT_REFRESH_SECS.to_string())?;
     }
@@ -144,6 +160,29 @@ pub fn configure_theme(binary_path: &str) -> Result<(), String> {
     set_option(HOOKS_INSTALLED_OPTION, "1")
 }
 
+// Live unload flow 🛑
+//
+// `stop` should make the current tmux server stop behaving like rustbox even
+// though tmux keeps hook definitions in server memory:
+//
+// 1. `@rustbox_enabled = 0`
+//    -> old hook-driven `publish` calls become harmless no-ops
+// 2. if `status-right` still points at `#{@rustbox_status_right}`
+//    -> blank it so the rustbox status disappears immediately
+// 3. clear the visible rustbox state options
+// 4. refresh the status line once
+pub fn disable_theme() -> Result<(), String> {
+    set_option(ENABLED_OPTION, "0")?;
+
+    if show_option("status-right").as_deref() == Some("#{@rustbox_status_right}") {
+        set_option("status-right", "")?;
+    }
+
+    set_option(STATUS_OPTION, "")?;
+    set_option(ACTIVE_PATH_OPTION, "")?;
+    refresh_status_line()
+}
+
 // Append tmux hooks instead of replacing unrelated user hooks on the same
 // event.
 fn append_hook(name: &str, command: &str) -> Result<(), String> {
@@ -155,15 +194,17 @@ fn append_hook(name: &str, command: &str) -> Result<(), String> {
     if status.success() {
         Ok(())
     } else {
-        Err(format!("tmux set-hook for {name} exited with status {status}"))
+        Err(format!(
+            "tmux set-hook for {name} exited with status {status}"
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        refresh_args, set_option_args, ACTIVE_PATH_OPTION, DAEMON_PID_OPTION,
-        DEFAULT_GIT_REFRESH_SECS, GIT_REFRESH_OPTION, STATUS_OPTION,
+        refresh_args, set_option_args, theme_enabled, ACTIVE_PATH_OPTION, DAEMON_PID_OPTION,
+        DEFAULT_GIT_REFRESH_SECS, ENABLED_OPTION, GIT_REFRESH_OPTION, STATUS_OPTION,
     };
 
     #[test]
@@ -184,6 +225,12 @@ mod tests {
         assert_eq!(ACTIVE_PATH_OPTION, "@rustbox_active_path");
         assert_eq!(DAEMON_PID_OPTION, "@rustbox_daemon_pid");
         assert_eq!(GIT_REFRESH_OPTION, "@rustbox_git_refresh_seconds");
+        assert_eq!(ENABLED_OPTION, "@rustbox_enabled");
         assert_eq!(DEFAULT_GIT_REFRESH_SECS, 30);
+    }
+
+    #[test]
+    fn treats_missing_enabled_flag_as_enabled() {
+        assert!(theme_enabled());
     }
 }

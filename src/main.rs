@@ -21,6 +21,13 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Ok(Command::Stop) => match run_stop() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::from(1)
+            }
+        },
         Ok(Command::Daemon) => match daemon::run_daemon() {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => {
@@ -54,7 +61,8 @@ fn main() -> ExitCode {
 // 2. publish one fresh value right now
 // 3. ensure one background updater exists for later refreshes
 fn run_init() -> Result<(), String> {
-    let binary_path = env::current_exe().map_err(|error| format!("failed to locate binary: {error}"))?;
+    let binary_path =
+        env::current_exe().map_err(|error| format!("failed to locate binary: {error}"))?;
     let binary_path = binary_path
         .to_str()
         .ok_or_else(|| "binary path is not valid UTF-8".to_string())?;
@@ -66,10 +74,23 @@ fn run_init() -> Result<(), String> {
     Ok(())
 }
 
+// `stop` is the tmux-facing unload path for the current server only.
+//
+// Diagram:
+// 1. mark rustbox disabled so old hooks become harmless no-ops
+// 2. clear the live rustbox status wiring if tmux is still using it
+// 3. terminate the current rustbox daemon for this tmux server
+fn run_stop() -> Result<(), String> {
+    let binary_path =
+        env::current_exe().map_err(|error| format!("failed to locate binary: {error}"))?;
+    daemon::stop_current_server(&binary_path)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
     Help,
     Init,
+    Stop,
     Daemon,
     Render { path: Option<PathBuf> },
     Publish { path: Option<PathBuf> },
@@ -82,6 +103,7 @@ fn parse_command(args: impl IntoIterator<Item = String>) -> Result<Command, Stri
     match args.next().as_deref() {
         None | Some("help") | Some("--help") | Some("-h") => Ok(Command::Help),
         Some("init") => reject_extra_args(args).map(|()| Command::Init),
+        Some("stop") => reject_extra_args(args).map(|()| Command::Stop),
         Some("daemon") => reject_extra_args(args).map(|()| Command::Daemon),
         Some("render") => parse_path_command(args).map(|path| Command::Render { path }),
         Some("publish") => parse_path_command(args).map(|path| Command::Publish { path }),
@@ -152,7 +174,10 @@ fn print_help() {
     println!("    rustbox-tmux <SUBCOMMAND> [OPTIONS]");
     println!();
     println!("SUBCOMMANDS:");
-    println!("    init      Configure tmux status-right, publish once, and replace/start the updater");
+    println!(
+        "    init      Configure tmux status-right, publish once, and replace/start the updater"
+    );
+    println!("    stop      Disable rustbox in the current tmux server and stop its updater");
     println!("    daemon    Start the long-lived status daemon");
     println!("    render    Print the current rendered status string");
     println!("    publish   Publish the current rendered status into tmux");
@@ -181,14 +206,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_stop() {
+        let command = parse_command(vec_of(&["rustbox-tmux", "stop"])).unwrap();
+        assert_eq!(command, Command::Stop);
+    }
+
+    #[test]
     fn parses_publish_with_path_flag() {
-        let command = parse_command(vec_of(&[
-            "rustbox-tmux",
-            "publish",
-            "--path",
-            "/tmp/demo",
-        ]))
-        .unwrap();
+        let command =
+            parse_command(vec_of(&["rustbox-tmux", "publish", "--path", "/tmp/demo"])).unwrap();
         assert_eq!(
             command,
             Command::Publish {
@@ -205,13 +231,8 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_paths() {
-        let error = parse_command(vec_of(&[
-            "rustbox-tmux",
-            "render",
-            "/tmp/one",
-            "/tmp/two",
-        ]))
-        .unwrap_err();
+        let error =
+            parse_command(vec_of(&["rustbox-tmux", "render", "/tmp/one", "/tmp/two"])).unwrap_err();
         assert!(error.contains("only be provided once"));
     }
 }

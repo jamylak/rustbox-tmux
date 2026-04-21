@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 
 use crate::render::{RenderState, Renderer};
 use crate::tmux::{
-    current_pane_path, publish_status, refresh_status_line, set_option, show_option,
-    ACTIVE_PATH_OPTION, DAEMON_PID_OPTION, DEFAULT_GIT_REFRESH_SECS, GIT_REFRESH_OPTION,
-    STATUS_OPTION,
+    current_pane_path, disable_theme, publish_status, refresh_status_line, set_option, show_option,
+    theme_enabled, ACTIVE_PATH_OPTION, DAEMON_PID_OPTION, DEFAULT_GIT_REFRESH_SECS,
+    GIT_REFRESH_OPTION, STATUS_OPTION,
 };
 use crate::widgets::{forge_section, git_section_string, metrics_section_string};
 
@@ -37,6 +37,11 @@ pub fn ensure_daemon(binary_path: &Path) -> Result<(), String> {
 }
 
 pub fn run_daemon() -> Result<(), String> {
+    if !theme_enabled() {
+        set_option(DAEMON_PID_OPTION, "")?;
+        return Ok(());
+    }
+
     let mut state = DaemonState::new(git_refresh_interval_secs());
     set_option(DAEMON_PID_OPTION, &std::process::id().to_string())?;
     publish_with_daemon_state(None, &mut state)?;
@@ -46,9 +51,33 @@ pub fn run_daemon() -> Result<(), String> {
     run_idle_loop(state);
 }
 
+// Stop flow 🛑
+//
+// current tmux server
+//   -> disable rustbox inside tmux first
+//   -> read the stored daemon pid
+//   -> terminate that daemon if it matches this rustbox binary
+//   -> clear the stored pid
+pub fn stop_current_server(binary_path: &Path) -> Result<(), String> {
+    disable_theme()?;
+
+    if let Some(pid) = show_option(DAEMON_PID_OPTION).and_then(|value| value.parse::<u32>().ok()) {
+        if process_is_running(pid) && process_is_our_daemon(pid, binary_path) {
+            stop_process(pid)?;
+        }
+    }
+
+    set_option(DAEMON_PID_OPTION, "")?;
+    Ok(())
+}
+
 // Publish one snapshot now and remember the resolved path so the background
 // loop can keep refreshing the same repo context.
 pub fn publish_once(path: Option<&Path>) -> Result<(), String> {
+    if !theme_enabled() {
+        return Ok(());
+    }
+
     let resolved_path = resolve_render_path(path);
     if let Some(path) = resolved_path.as_deref() {
         set_option(ACTIVE_PATH_OPTION, &path.to_string_lossy())?;
@@ -85,6 +114,14 @@ fn log_startup() {
 //   refresh interval has expired
 fn run_idle_loop(mut state: DaemonState) -> ! {
     loop {
+        // Let `rustbox-tmux stop` shut the daemon down cleanly even if the
+        // explicit SIGTERM race-misses and the process survives until the next
+        // wake-up.
+        if !theme_enabled() {
+            let _ = set_option(DAEMON_PID_OPTION, "");
+            std::process::exit(0);
+        }
+
         thread::sleep(Duration::from_secs(METRICS_REFRESH_SECS));
         let _ = publish_with_daemon_state(None, &mut state);
     }
@@ -104,6 +141,10 @@ fn active_path() -> Option<PathBuf> {
 }
 
 fn publish_with_daemon_state(path: Option<&Path>, state: &mut DaemonState) -> Result<(), String> {
+    if !theme_enabled() {
+        return Ok(());
+    }
+
     let resolved_path = resolve_render_path(path);
     if let Some(path) = resolved_path.as_deref() {
         set_option(ACTIVE_PATH_OPTION, &path.to_string_lossy())?;
@@ -139,6 +180,7 @@ fn git_refresh_interval_secs() -> u64 {
 fn process_is_running(pid: u32) -> bool {
     Command::new("kill")
         .args(["-0", &pid.to_string()])
+        .stderr(Stdio::null())
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
@@ -168,9 +210,13 @@ fn process_is_our_daemon(pid: u32, binary_path: &Path) -> bool {
 fn stop_process(pid: u32) -> Result<(), String> {
     let status = Command::new("kill")
         .arg(pid.to_string())
+        .stderr(Stdio::null())
         .status()
         .map_err(|error| format!("failed to stop old rustbox daemon {pid}: {error}"))?;
     if !status.success() {
+        if !process_is_running(pid) {
+            return Ok(());
+        }
         return Err(format!("failed to stop old rustbox daemon {pid}: {status}"));
     }
 
@@ -181,7 +227,9 @@ fn stop_process(pid: u32) -> Result<(), String> {
         thread::sleep(Duration::from_millis(50));
     }
 
-    Err(format!("old rustbox daemon {pid} did not exit after SIGTERM"))
+    Err(format!(
+        "old rustbox daemon {pid} did not exit after SIGTERM"
+    ))
 }
 
 struct DaemonState {
@@ -259,7 +307,10 @@ mod tests {
 
         assert_eq!(first, "");
         assert_eq!(second, "");
-        assert_eq!(state.git_cache.repo_path.as_deref(), Some(Path::new("/tmp/two")));
+        assert_eq!(
+            state.git_cache.repo_path.as_deref(),
+            Some(Path::new("/tmp/two"))
+        );
     }
 
     #[test]
@@ -270,6 +321,9 @@ mod tests {
         state.git_cache.refreshed_at = Some(Instant::now());
         state.git_cache.refresh_interval = Duration::from_secs(30);
 
-        assert_eq!(state.git_cache.section_for(Some(Path::new("/tmp/demo"))), "cached");
+        assert_eq!(
+            state.git_cache.section_for(Some(Path::new("/tmp/demo"))),
+            "cached"
+        );
     }
 }

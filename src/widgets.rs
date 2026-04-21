@@ -32,9 +32,7 @@ pub fn metrics_section_string() -> String {
     let cpu = cpu_percent().unwrap_or(0);
     let ram = ram_percent().unwrap_or(0);
 
-    format!(
-        "#[fg=colour109]▒ 🧠 {cpu}% #[fg=colour108]💾 {ram}%"
-    )
+    format!("#[fg=colour109]▒ 🧠 {cpu}% #[fg=colour108]💾 {ram}%")
 }
 
 pub fn current_git_snapshot(path: Option<&Path>) -> Option<GitSnapshot> {
@@ -58,7 +56,10 @@ pub fn current_git_snapshot(path: Option<&Path>) -> Option<GitSnapshot> {
         "git",
         &["ls-files", "--other", "--directory", "--exclude-standard"],
     )?;
-    let untracked_count = untracked_output.lines().filter(|line| !line.trim().is_empty()).count() as u32;
+    let untracked_count = untracked_output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count() as u32;
 
     Some(GitSnapshot {
         branch: truncate_branch(branch),
@@ -220,8 +221,12 @@ fn parse_diff_numstat(diff_numstat: &str) -> (u32, u32, u32) {
         }
 
         changed += 1;
-        insertions += added.and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
-        deletions += removed.and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
+        insertions += added
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+        deletions += removed
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
     }
 
     (changed, insertions, deletions)
@@ -258,8 +263,8 @@ mod tests {
     use super::{
         clamp_percent, forge_section, format_git_section, git_section_string, meminfo_value_kib,
         metrics_section_string, parse_diff_numstat, parse_vm_stat_count, parse_vm_stat_page_size,
-        percent_from_used_total, truncate_branch, GitSnapshot,
-        FORGE_SECTION_STUB, SHOW_FORGE_SECTION,
+        percent_from_used_total, truncate_branch, GitSnapshot, FORGE_SECTION_STUB,
+        SHOW_FORGE_SECTION,
     };
 
     #[test]

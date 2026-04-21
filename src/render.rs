@@ -102,7 +102,10 @@ mod tests {
 
         render_status(&state, &mut output);
 
-        assert_eq!(output, "git#[fg=colour244] | forge#[fg=colour244] | metrics");
+        assert_eq!(
+            output,
+            "git#[fg=colour244] | forge#[fg=colour244] | metrics"
+        );
     }
 
     #[test]
