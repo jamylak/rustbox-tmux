@@ -18,6 +18,7 @@ Current subcommands:
 - `publish`: publish the current status into a tmux user option
 - `daemon`: keep the published status fresh in the background
 - `init`: configure `status-right`, publish once, and replace/start the updater
+- `stop`: disable rustbox in the current tmux server and stop its updater
 
 ## Prerequisites
 
@@ -60,20 +61,76 @@ Start the background updater:
 cargo run -- daemon
 ```
 
-## tmux Wiring
+## Install with TPM
 
-Use the repo-root loader from `.tmux.conf`:
+Primary path:
 
 ```tmux
-run-shell "/Users/james/proj/rustbox-tmux/rustbox.tmux"
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'jamylak/rustbox-tmux'
+set -g @rustbox_git_refresh_seconds 30
+
+run '~/.tmux/plugins/tpm/tpm'
+```
+
+Then install/reload plugins in the normal TPM way.
+
+`TPM` clones the plugin into `~/.tmux/plugins/rustbox-tmux` and runs the
+plugin-root `rustbox.tmux` loader for you. That loader reuses the existing
+release binary when it is up to date. If the source tree is newer, it
+rebuilds, then points `status-right` at `#{@rustbox_status_right}`, installs
+the minimal refresh hooks, publishes an initial value, and replaces the old
+daemon so a rebuilt binary actually takes over after reload.
+
+## Local Checkout
+
+Secondary path for local development or quick testing:
+
+```tmux
+run-shell "$HOME/path/to/rustbox-tmux/rustbox.tmux"
 set -g @rustbox_git_refresh_seconds 30
 ```
 
-That loader reuses the existing release binary when it is up to date. If the
-source tree is newer, it rebuilds, then points `status-right` at
-`#{@rustbox_status_right}`, installs the minimal refresh hooks, publishes an
-initial value, and replaces the old daemon so a rebuilt binary actually takes
-over after reload.
+That does the same bootstrap work as the TPM install, but from your local
+checkout instead of the TPM plugin directory.
+
+## Sandbox Test
+
+If you want to test rustbox against your real tmux config without touching your
+main tmux server, use `scripts/test-dotfiles-sandbox.sh`.
+
+Default flow:
+
+```bash
+scripts/test-dotfiles-sandbox.sh
+```
+
+If your real config lives somewhere else, point the script at it explicitly.
+For example, with your current dotfiles layout:
+
+```bash
+RUSTBOX_TEST_BASE_CONF="$HOME/proj/dotfiles/.tmux.conf" \
+scripts/test-dotfiles-sandbox.sh
+```
+
+What that script does:
+
+```text
+your real tmux config
+  -> source it into a temporary config overlay
+  -> append `run-shell ".../rustbox.tmux"` from this checkout
+  -> boot a separate tmux socket
+  -> attach to that sandbox server only
+```
+
+So you get your actual keybinds/plugins/settings, but rustbox runs in an
+isolated tmux server instead of your main one.
+
+When you are done with the sandbox:
+
+```bash
+tmux -S /tmp/rustbox-tmux-sandbox.sock kill-server
+```
 
 ## Test It
 
@@ -93,7 +150,14 @@ Big picture:
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ .tmux.conf                                                          │
-│   run-shell "/Users/james/proj/rustbox-tmux/rustbox.tmux"           │
+│   set -g @plugin 'jamylak/rustbox-tmux'                             │
+│   run '~/.tmux/plugins/tpm/tpm'                                     │
+└──────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ TPM discovers the plugin and runs `~/.tmux/plugins/rustbox-tmux/    │
+│ rustbox.tmux`                                                       │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
@@ -149,8 +213,9 @@ Big picture:
 
 ### When It Runs
 
-- `.tmux.conf` load / re-source:
-  `rustbox.tmux` runs once to bootstrap the compiled binary.
+- tmux startup / config re-source:
+  `TPM` or your local `run-shell` line runs `rustbox.tmux` once to bootstrap
+  the compiled binary.
 - pane/window/client context changes:
   tmux fires a hook, which runs `rustbox-tmux publish`.
 - background refresh:
@@ -344,9 +409,9 @@ So config reload now does two things:
 - self-heal if the daemon died
 - force an upgrade if the binary changed
 
-### What happens if I remove the `run-shell` line from tmux config?
+### What happens if I remove rustbox from tmux config?
 
-Removing it from config does **not** automatically unload what is already
+Removing rustbox from config does **not** automatically unload what is already
 running in the current tmux server.
 
 In the current live server:
@@ -361,25 +426,44 @@ On the next fresh tmux server start:
 - no hooks get installed
 - no daemon gets started
 
-So removing the line prevents future startup, but it does not retroactively
-tear down the current server state.
+So removing the plugin line or local `run-shell` line prevents future startup,
+but it does not retroactively tear down the current server state.
 
-Current practical solution:
+Current practical solution without restarting the tmux server:
 
 ```text
-1. remove the `run-shell` line from config
-2. kill the rustbox daemon pid
-3. restart the tmux server
+1. remove the rustbox plugin line or local `run-shell` line from config
+2. re-source tmux config so rustbox does not re-bootstrap
+3. run `rustbox.tmux stop` for the current tmux server
+4. load another theme or set your preferred `status-right`
 ```
 
-Example shell command for step 2:
+TPM install:
 
 ```bash
-kill "$(tmux show-option -gv @rustbox_daemon_pid)"
+~/.tmux/plugins/rustbox-tmux/rustbox.tmux stop
 ```
 
-That is the clean unload path today because the hooks live in tmux server
-memory for the lifetime of that server.
+Local checkout:
+
+```bash
+"$HOME/path/to/rustbox-tmux/rustbox.tmux" stop
+```
+
+Run that command from a shell pane inside the tmux server you want to stop.
+
+What `stop` actually does:
+
+```text
+stop
+  -> set `@rustbox_enabled = 0`
+  -> blank `status-right` if tmux is still pointing at rustbox
+  -> clear the published rustbox status value
+  -> kill the current rustbox daemon
+  -> leave old tmux hooks inert instead of trying to rip them out
+```
+
+That is the practical no-restart unload path now.
 
 ### How do I kill the daemon?
 
@@ -395,6 +479,12 @@ Kill it:
 kill "$(tmux show-option -gv @rustbox_daemon_pid)"
 ```
 
+Preferred full stop:
+
+```bash
+~/.tmux/plugins/rustbox-tmux/rustbox.tmux stop
+```
+
 Optional cleanup:
 
 ```bash
@@ -402,13 +492,15 @@ tmux set-option -gu @rustbox_daemon_pid
 tmux set-option -gu @rustbox_status_right
 ```
 
-The cleanest full unload is still:
+If you only kill the pid manually, the old hooks are still there and the next
+hook fire can republish rustbox state. `stop` is safer because it disables
+future hook-driven publishes in the current server before stopping the daemon.
+
+The cleanest full unload is now:
 
 ```text
-1. remove the `run-shell` line from config
-2. kill the daemon pid
-3. restart the tmux server
+1. remove the rustbox config line
+2. re-source tmux config
+3. run `rustbox.tmux stop`
+4. load another theme or set another `status-right`
 ```
-
-That avoids trying to surgically remove only the hook entries that rustbox
-added.
