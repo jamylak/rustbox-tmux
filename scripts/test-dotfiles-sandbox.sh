@@ -6,7 +6,9 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_CONF="${RUSTBOX_TEST_BASE_CONF:-$HOME/.tmux.conf}"
 SOCKET_PATH="${RUSTBOX_TEST_SOCKET:-/tmp/rustbox-tmux-sandbox.sock}"
 SESSION_NAME="${RUSTBOX_TEST_SESSION:-rustbox-sandbox}"
-TEMP_CONF="$(mktemp /tmp/rustbox-tmux-sandbox.XXXXXX.conf)"
+# macOS `mktemp` wants the X suffix at the end of the template. A `.conf`
+# suffix is not needed here because tmux only needs a readable file path.
+TEMP_CONF="$(mktemp /tmp/rustbox-tmux-sandbox.XXXXXX)"
 GIT_REFRESH_SECS="${RUSTBOX_GIT_REFRESH_SECONDS:-30}"
 
 cleanup() {
