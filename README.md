@@ -17,7 +17,7 @@ Current subcommands:
 - `render`: print the current static status string
 - `publish`: publish the current status into a tmux user option
 - `daemon`: keep the published status fresh in the background
-- `init`: configure `status-right`, publish once, and ensure the updater exists
+- `init`: configure `status-right`, publish once, and replace/start the updater
 
 ## Prerequisites
 
@@ -66,12 +66,14 @@ Use the repo-root loader from `.tmux.conf`:
 
 ```tmux
 run-shell "/Users/james/proj/rustbox-tmux/rustbox.tmux"
+set -g @rustbox_git_refresh_seconds 30
 ```
 
 That loader reuses the existing release binary when it is up to date. If the
 source tree is newer, it rebuilds, then points `status-right` at
 `#{@rustbox_status_right}`, installs the minimal refresh hooks, publishes an
-initial value, and starts the background updater if it is not already running.
+initial value, and replaces the old daemon so a rebuilt binary actually takes
+over after reload.
 
 ## Test It
 
@@ -108,7 +110,7 @@ Big picture:
 │ 1. set `status-right` -> `#{@rustbox_status_right}`                │
 │ 2. install tmux hooks for context changes                          │
 │ 3. publish one fresh status value immediately                      │
-│ 4. ensure one background daemon is running                         │
+│ 4. replace/start one background daemon for this tmux server        │
 └──────────────────────────────────────────────────────────────────────┘
                          │                              │
                          │                              │
@@ -116,8 +118,8 @@ Big picture:
 ┌─────────────────────────────────────┐    ┌──────────────────────────┐
 │ tmux hooks                          │    │ background daemon         │
 │ - after-select-pane                 │    │ loop every 5s             │
-│ - after-select-window               │    │ -> `publish_once(None)`   │
-│ - after-new-window                  │    │                           │
+│ - after-select-window               │    │ -> metrics refresh        │
+│ - after-new-window                  │    │ -> git refresh every 30s* │
 │ - after-split-window                │    └──────────────────────────┘
 │ - client-attached                   │
 │                                     │
@@ -143,6 +145,8 @@ Big picture:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+`*` configurable via `@rustbox_git_refresh_seconds`
+
 ### When It Runs
 
 - `.tmux.conf` load / re-source:
@@ -152,6 +156,9 @@ Big picture:
 - background refresh:
   the daemon wakes up every 5 seconds to keep metrics fresh even if you are
   sitting in one pane.
+- git polling:
+  the daemon reuses the cached git section until `@rustbox_git_refresh_seconds`
+  expires. The default is 30 seconds.
 - status redraw:
   tmux only reads `#{@rustbox_status_right}`. It does not run `cargo`, the
   loader script, or a widget shell script on every redraw.
@@ -165,7 +172,8 @@ This is the honest list of what is still not ideal:
 - tmux hooks still spawn a short-lived `rustbox-tmux publish` process on every
   pane/window/split/attach event.
 - the daemon polls every 5 seconds even when nothing changed.
-- the git widget still shells out to `git`.
+- the git widget still shells out to `git`, though background polling is now
+  rate-limited separately from the 5-second metrics loop.
 - macOS metrics still shell out to `sysctl`, `ps`, and `vm_stat`.
 - the forge section is still just the current stub, so that part of the
   architecture is present but not useful yet.
@@ -185,7 +193,11 @@ Warm path  🔁
 
 Warm path  ⏱
   every 5s
-    -> daemon refresh
+    -> daemon metrics refresh
+
+Warm path  🐙
+  every 30s by default
+    -> daemon git refresh for the current path
 
 Hot path   ⚡
   tmux redraw
@@ -216,8 +228,11 @@ Current refresh triggers:
   the installed hooks run `rustbox-tmux publish` so the status follows the
   currently focused pane path.
 - idle background refresh:
-  the daemon wakes up every 5 seconds and republishes so CPU/RAM numbers do not
-  stay stale forever when you sit in one pane.
+  the daemon wakes up every 5 seconds so CPU/RAM numbers do not stay stale
+  forever when you sit in one pane.
+- background git refresh:
+  the daemon keeps the last git section cached and only refreshes it when the
+  git interval expires. The default is 30 seconds.
 
 Why the explicit redraw call?
 
@@ -235,15 +250,24 @@ would wait for tmux's next natural redraw point to see it.
 For lightweight system metrics, yes, a 5-10 second poll is a pretty normal
 "fresh enough" interval.
 
-For git polling, 5 seconds is more debatable:
+For git polling, the default is now separate and slower:
 
-- for one active repo on a developer machine, it is usually acceptable
-- for a more polished architecture, it is still more polling than ideal
-- long term, the better answer is smarter invalidation or at least a tunable
-  interval
+- metrics loop:
+  `5s`
+- git background polling:
+  `30s` by default via `@rustbox_git_refresh_seconds`
 
-So the honest answer is: `5s` is reasonable for this prototype, but it is not
-the final word.
+That split is more reasonable for the current architecture:
+
+- CPU/RAM want a short interval
+- git does not need to be hammered at the same cadence
+- hook-driven `publish` still updates git immediately when pane/window context
+  changes
+
+So the current answer is:
+
+- `5s` is normal for metrics
+- `30s` is the more acceptable default for background git polling here
 
 ### Is there one daemon for many tmux sessions and repos?
 
@@ -276,23 +300,28 @@ with its own daemon.
 
 ### Do we still shell out to git every 5 seconds?
 
-Yes, for the currently active remembered path.
+Not in the background loop anymore.
 
 Current path:
 
 ```text
 every 5s
-  -> daemon runs `publish_once(None)`
-  -> renderer calls git widget
+  -> daemon refreshes metrics
+
+every 30s by default
+  -> daemon refreshes cached git section for the current path
   -> git widget shells out to `git`
 ```
 
-Also, every hook-driven `publish` does the same thing immediately.
+Also, every hook-driven `publish` does an immediate git refresh for the current
+pane path.
 
 So the current design is:
 
 - not "scan every repo every 5 seconds"
-- but still "run git commands every 5 seconds for the current path"
+- not "run git every 5 seconds in the background"
+- but still "run git immediately on context-change hooks"
+- and "run git periodically for the current remembered path"
 
 That is acceptable for a small current-feature prototype, but it is one of the
 remaining inefficiencies called out above.
@@ -306,12 +335,14 @@ Current behavior:
 - the loader reuses the release binary unless the source tree is newer
 - `init` republishes the current status once
 - hook installation is guarded, so hooks do not stack on every reload
-- `ensure_daemon()` checks the stored pid and reuses the daemon if it is still
-  alive
-- if the old daemon died, `init` starts a replacement
+- `init` terminates the previous daemon and starts a fresh one
+- that means a rebuilt binary actually replaces the old in-memory daemon after
+  reload
 
-So yes: config reload is currently the main self-healing path for replacing a
-dead daemon.
+So config reload now does two things:
+
+- self-heal if the daemon died
+- force an upgrade if the binary changed
 
 ### What happens if I remove the `run-shell` line from tmux config?
 
@@ -332,6 +363,23 @@ On the next fresh tmux server start:
 
 So removing the line prevents future startup, but it does not retroactively
 tear down the current server state.
+
+Current practical solution:
+
+```text
+1. remove the `run-shell` line from config
+2. kill the rustbox daemon pid
+3. restart the tmux server
+```
+
+Example shell command for step 2:
+
+```bash
+kill "$(tmux show-option -gv @rustbox_daemon_pid)"
+```
+
+That is the clean unload path today because the hooks live in tmux server
+memory for the lifetime of that server.
 
 ### How do I kill the daemon?
 
