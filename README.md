@@ -194,3 +194,173 @@ Hot path   ⚡
     -> no loader
     -> no widget shell script
 ```
+
+## FAQ
+
+### When is tmux actually refreshing UI stuff, and why?
+
+There are two different things happening:
+
+- status content refresh:
+  Rust recalculates the string and writes a new value into
+  `@rustbox_status_right`.
+- tmux UI redraw:
+  tmux repaints the status line using whatever value is already sitting in
+  `@rustbox_status_right`.
+
+Current refresh triggers:
+
+- startup / config reload:
+  `rustbox.tmux` runs `rustbox-tmux init`, which publishes once immediately.
+- pane or window context changes:
+  the installed hooks run `rustbox-tmux publish` so the status follows the
+  currently focused pane path.
+- idle background refresh:
+  the daemon wakes up every 5 seconds and republishes so CPU/RAM numbers do not
+  stay stale forever when you sit in one pane.
+
+Why the explicit redraw call?
+
+```text
+Rust publishes a new value
+  -> tmux still has to repaint
+  -> `refresh-client -S` nudges that repaint now
+```
+
+Without that redraw nudge, the updated value would still land in tmux, but you
+would wait for tmux's next natural redraw point to see it.
+
+### Is 5 seconds a normal amount?
+
+For lightweight system metrics, yes, a 5-10 second poll is a pretty normal
+"fresh enough" interval.
+
+For git polling, 5 seconds is more debatable:
+
+- for one active repo on a developer machine, it is usually acceptable
+- for a more polished architecture, it is still more polling than ideal
+- long term, the better answer is smarter invalidation or at least a tunable
+  interval
+
+So the honest answer is: `5s` is reasonable for this prototype, but it is not
+the final word.
+
+### Is there one daemon for many tmux sessions and repos?
+
+Per tmux server, yes.
+
+```text
+one tmux server/socket
+  -> one `@rustbox_daemon_pid`
+  -> one `@rustbox_status_right`
+  -> one `@rustbox_active_path`
+  -> one daemon process
+```
+
+That means:
+
+- multiple sessions inside the same tmux server share the same daemon
+- multiple windows/panes inside the same tmux server share the same published
+  status option
+- the daemon does not iterate over every repo in every pane
+- it refreshes only the single currently remembered active path
+
+This is an important current limitation:
+
+- if two clients on the same tmux server are focused on different repos, the
+  last `publish` wins
+- this is not yet a per-session or per-client status architecture
+
+If you use separate tmux servers via different sockets, each server can end up
+with its own daemon.
+
+### Do we still shell out to git every 5 seconds?
+
+Yes, for the currently active remembered path.
+
+Current path:
+
+```text
+every 5s
+  -> daemon runs `publish_once(None)`
+  -> renderer calls git widget
+  -> git widget shells out to `git`
+```
+
+Also, every hook-driven `publish` does the same thing immediately.
+
+So the current design is:
+
+- not "scan every repo every 5 seconds"
+- but still "run git commands every 5 seconds for the current path"
+
+That is acceptable for a small current-feature prototype, but it is one of the
+remaining inefficiencies called out above.
+
+### What happens if I refresh tmux config?
+
+Reloading config runs the loader again.
+
+Current behavior:
+
+- the loader reuses the release binary unless the source tree is newer
+- `init` republishes the current status once
+- hook installation is guarded, so hooks do not stack on every reload
+- `ensure_daemon()` checks the stored pid and reuses the daemon if it is still
+  alive
+- if the old daemon died, `init` starts a replacement
+
+So yes: config reload is currently the main self-healing path for replacing a
+dead daemon.
+
+### What happens if I remove the `run-shell` line from tmux config?
+
+Removing it from config does **not** automatically unload what is already
+running in the current tmux server.
+
+In the current live server:
+
+- the already-installed hooks remain in tmux memory
+- the existing daemon keeps running
+- `status-right` stays pointed at `#{@rustbox_status_right}` until changed
+
+On the next fresh tmux server start:
+
+- nothing bootstraps
+- no hooks get installed
+- no daemon gets started
+
+So removing the line prevents future startup, but it does not retroactively
+tear down the current server state.
+
+### How do I kill the daemon?
+
+Current daemon pid:
+
+```bash
+tmux show-option -gv @rustbox_daemon_pid
+```
+
+Kill it:
+
+```bash
+kill "$(tmux show-option -gv @rustbox_daemon_pid)"
+```
+
+Optional cleanup:
+
+```bash
+tmux set-option -gu @rustbox_daemon_pid
+tmux set-option -gu @rustbox_status_right
+```
+
+The cleanest full unload is still:
+
+```text
+1. remove the `run-shell` line from config
+2. kill the daemon pid
+3. restart the tmux server
+```
+
+That avoids trying to surgically remove only the hook entries that rustbox
+added.
