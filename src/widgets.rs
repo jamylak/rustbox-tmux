@@ -2,7 +2,6 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-const GIT_SECTION_STUB: &str = "#[fg=colour142]▒  main";
 const FORGE_SECTION_STUB: &str = "#[fg=colour214]▒  --";
 const SHOW_FORGE_SECTION: bool = false;
 
@@ -15,10 +14,10 @@ pub struct GitSnapshot {
     pub untracked_count: u32,
 }
 
-pub fn git_section_string() -> String {
-    current_git_snapshot()
+pub fn git_section_string(path: Option<&Path>) -> String {
+    current_git_snapshot(path)
         .map(format_git_section)
-        .unwrap_or_else(|| GIT_SECTION_STUB.to_string())
+        .unwrap_or_default()
 }
 
 pub fn forge_section() -> &'static str {
@@ -27,10 +26,6 @@ pub fn forge_section() -> &'static str {
     } else {
         ""
     }
-}
-
-pub fn metrics_section() -> &'static str {
-    ""
 }
 
 pub fn metrics_section_string() -> String {
@@ -42,8 +37,8 @@ pub fn metrics_section_string() -> String {
     )
 }
 
-pub fn current_git_snapshot() -> Option<GitSnapshot> {
-    let repo_root = command_output("git", &["rev-parse", "--show-toplevel"])?;
+pub fn current_git_snapshot(path: Option<&Path>) -> Option<GitSnapshot> {
+    let repo_root = command_output_in_dir(path?, "git", &["rev-parse", "--show-toplevel"])?;
     let repo_root = repo_root.trim();
     if repo_root.is_empty() {
         return None;
@@ -262,15 +257,15 @@ fn clamp_percent(value: i64) -> u8 {
 mod tests {
     use super::{
         clamp_percent, forge_section, format_git_section, git_section_string, meminfo_value_kib,
-        metrics_section, metrics_section_string, parse_diff_numstat, parse_vm_stat_count,
-        parse_vm_stat_page_size, percent_from_used_total, truncate_branch, GitSnapshot,
+        metrics_section_string, parse_diff_numstat, parse_vm_stat_count, parse_vm_stat_page_size,
+        percent_from_used_total, truncate_branch, GitSnapshot,
         FORGE_SECTION_STUB, SHOW_FORGE_SECTION,
     };
 
     #[test]
     fn builds_current_widget_sections() {
-        assert!(!git_section_string().is_empty());
-        assert_eq!(metrics_section(), "");
+        let current_dir = std::env::current_dir().unwrap();
+        assert!(!git_section_string(Some(current_dir.as_path())).is_empty());
         assert!(metrics_section_string().contains("🧠"));
         assert!(metrics_section_string().contains("💾"));
 
