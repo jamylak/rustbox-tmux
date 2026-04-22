@@ -52,7 +52,7 @@ pub fn metrics_section_string() -> String {
 
     format!(
         "{RESET}#[fg=#fabd2f,bg=#282828,bold]▒ #[fg=#d79921]🧠 {} #[fg=#d79921]{cpu}% \
-#[fg=#fbf1c7]💾 {} #[fg=#fe8019]{ram}%",
+#[fg=#fbf1c7]💾 {} #[fg=#fe8019]{ram}% ",
         usage_blocks(cpu),
         usage_blocks(ram),
     )
