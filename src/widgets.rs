@@ -140,20 +140,8 @@ fn linux_ram_percent() -> Option<u8> {
 }
 
 fn macos_cpu_percent() -> Option<u8> {
-    let logical_cpu_output = command_output("sysctl", &["-n", "hw.logicalcpu"])?;
-    let logical_cpus: f64 = logical_cpu_output.trim().parse().ok()?;
-    if logical_cpus <= 0.0 {
-        return None;
-    }
-
-    let cpu_output = command_output("ps", &["-A", "-o", "%cpu"])?;
-    let summed_cpu: f64 = cpu_output
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.trim().parse::<f64>().ok())
-        .sum();
-
-    Some(clamp_percent((summed_cpu / logical_cpus).round() as i64))
+    let top_output = command_output("top", &["-l", "1", "-n", "0"])?;
+    parse_macos_top_cpu_percent(&top_output)
 }
 
 fn macos_ram_percent() -> Option<u8> {
@@ -212,6 +200,25 @@ fn parse_vm_stat_count(vm_stat_output: &str, label: &str) -> Option<u64> {
         .find(|line| line.trim_start().starts_with(label))?;
     let value = line.split(':').nth(1)?.trim().trim_end_matches('.');
     value.parse().ok()
+}
+
+fn parse_macos_top_cpu_percent(top_output: &str) -> Option<u8> {
+    let cpu_line = top_output
+        .lines()
+        .find(|line| line.trim_start().starts_with("CPU usage:"))?;
+    let user = parse_macos_cpu_field(cpu_line, "% user")?;
+    let sys = parse_macos_cpu_field(cpu_line, "% sys")?;
+
+    Some(clamp_percent((user + sys).round() as i64))
+}
+
+fn parse_macos_cpu_field(line: &str, suffix: &str) -> Option<f64> {
+    let end = line.find(suffix)?;
+    let value = line[..end]
+        .rsplit_once(char::is_whitespace)
+        .map(|(_, value)| value)
+        .unwrap_or(&line[..end]);
+    value.trim().parse().ok()
 }
 
 fn parse_diff_numstat(diff_numstat: &str) -> (u32, u32, u32) {
@@ -281,9 +288,9 @@ fn usage_blocks(percent: u8) -> &'static str {
 mod tests {
     use super::{
         clamp_percent, forge_section, format_git_section, git_section_string, meminfo_value_kib,
-        metrics_section_string, parse_diff_numstat, parse_vm_stat_count, parse_vm_stat_page_size,
-        percent_from_used_total, truncate_branch, GitSnapshot, FORGE_SECTION_STUB,
-        SHOW_FORGE_SECTION,
+        metrics_section_string, parse_diff_numstat, parse_macos_top_cpu_percent,
+        parse_vm_stat_count, parse_vm_stat_page_size, percent_from_used_total, truncate_branch,
+        GitSnapshot, FORGE_SECTION_STUB, SHOW_FORGE_SECTION,
     };
 
     #[test]
@@ -315,6 +322,13 @@ mod tests {
         assert_eq!(parse_vm_stat_page_size(sample), Some(16384));
         assert_eq!(parse_vm_stat_count(sample, "Pages free"), Some(100));
         assert_eq!(parse_vm_stat_count(sample, "Pages active"), Some(200));
+    }
+
+    #[test]
+    fn parses_macos_top_cpu_output() {
+        let sample = "Processes: 520 total, 2 running, 518 sleeping, 2484 threads\nCPU usage: 4.34% user, 11.11% sys, 84.54% idle\n";
+
+        assert_eq!(parse_macos_top_cpu_percent(sample), Some(15));
     }
 
     #[test]
