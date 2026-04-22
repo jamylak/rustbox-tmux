@@ -23,7 +23,7 @@ const PATH_SUBSCRIPTION_FORMAT: &str = "path:%*:#{pane_id} #{pane_current_path}"
 // binary instead of leaving an old process running forever.
 pub fn ensure_daemon(binary_path: &Path) -> Result<(), String> {
     if let Some(pid) = show_option(DAEMON_PID_OPTION).and_then(|value| value.parse::<u32>().ok()) {
-        if process_is_running(pid) && process_is_our_daemon(pid, binary_path) {
+        if process_is_running(pid) && process_is_rustbox_daemon(pid) {
             stop_process(pid)?;
         }
     }
@@ -60,13 +60,14 @@ pub fn run_daemon() -> Result<(), String> {
 // current tmux server
 //   -> disable rustbox inside tmux first
 //   -> read the stored daemon pid
-//   -> terminate that daemon if it matches this rustbox binary
+//   -> terminate that daemon if it is any rustbox daemon for this server,
+//      even if the binary path changed between TPM/local/rebuilt copies
 //   -> clear the stored pid
-pub fn stop_current_server(binary_path: &Path) -> Result<(), String> {
+pub fn stop_current_server(_binary_path: &Path) -> Result<(), String> {
     disable_theme()?;
 
     if let Some(pid) = show_option(DAEMON_PID_OPTION).and_then(|value| value.parse::<u32>().ok()) {
-        if process_is_running(pid) && process_is_our_daemon(pid, binary_path) {
+        if process_is_running(pid) && process_is_rustbox_daemon(pid) {
             stop_process(pid)?;
         }
     }
@@ -120,8 +121,23 @@ fn log_startup() {
 //   refresh interval has expired
 fn run_idle_loop(mut state: DaemonState) -> ! {
     let mut path_subscription = PathSubscription::attach();
+    let pid = std::process::id();
 
     loop {
+        // Ownership check 👑
+        //
+        // This daemon only stays alive while tmux still points
+        // `@rustbox_daemon_pid` at this exact pid.
+        //
+        // That makes stale daemons die off when:
+        // - the tmux server is killed and the option disappears
+        // - a newer daemon replaces this one during reload/startup
+        // - the sandbox script boots a fresh tmux server on the same socket
+        if !daemon_still_owned(pid) {
+            drop(path_subscription);
+            std::process::exit(0);
+        }
+
         // Let `rustbox-tmux stop` shut the daemon down cleanly even if the
         // explicit SIGTERM race-misses and the process survives until the next
         // wake-up.
@@ -189,6 +205,17 @@ fn git_refresh_interval_secs() -> u64 {
         .unwrap_or(DEFAULT_GIT_REFRESH_SECS)
 }
 
+fn daemon_still_owned(pid: u32) -> bool {
+    daemon_pid_matches(show_option(DAEMON_PID_OPTION).as_deref(), pid)
+}
+
+fn daemon_pid_matches(stored_pid: Option<&str>, pid: u32) -> bool {
+    stored_pid
+        .and_then(|value| value.parse::<u32>().ok())
+        .map(|owner_pid| owner_pid == pid)
+        .unwrap_or(false)
+}
+
 // `kill -0` is a liveness probe, not a termination signal.
 //
 // It asks the kernel:
@@ -207,10 +234,7 @@ fn process_is_running(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-fn process_is_our_daemon(pid: u32, binary_path: &Path) -> bool {
-    let Some(binary_path) = binary_path.to_str() else {
-        return false;
-    };
+fn process_is_rustbox_daemon(pid: u32) -> bool {
     let output = Command::new("ps")
         .args(["-o", "command=", "-p", &pid.to_string()])
         .output()
@@ -224,8 +248,12 @@ fn process_is_our_daemon(pid: u32, binary_path: &Path) -> bool {
 
     String::from_utf8(output.stdout)
         .ok()
-        .map(|command| command.contains(binary_path) && command.contains(" daemon"))
+        .map(|command| command_looks_like_rustbox_daemon(&command))
         .unwrap_or(false)
+}
+
+fn command_looks_like_rustbox_daemon(command: &str) -> bool {
+    command.contains("rustbox-tmux") && command.contains(" daemon")
 }
 
 fn stop_process(pid: u32) -> Result<(), String> {
@@ -378,7 +406,10 @@ impl GitSectionCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{current_render_state, DaemonState, PATH_SUBSCRIPTION_FORMAT};
+    use super::{
+        command_looks_like_rustbox_daemon, current_render_state, daemon_pid_matches, DaemonState,
+        PATH_SUBSCRIPTION_FORMAT,
+    };
     use crate::widgets::{forge_section, git_section_string};
     use std::path::Path;
     use std::time::{Duration, Instant};
@@ -427,5 +458,26 @@ mod tests {
             PATH_SUBSCRIPTION_FORMAT,
             "path:%*:#{pane_id} #{pane_current_path}"
         );
+    }
+
+    #[test]
+    fn detects_rustbox_daemon_commands_across_binary_paths() {
+        assert!(command_looks_like_rustbox_daemon(
+            "/Users/james/.tmux/plugins/rustbox-tmux/target/release/rustbox-tmux daemon"
+        ));
+        assert!(command_looks_like_rustbox_daemon(
+            "/Users/james/proj/rustbox-tmux/target/release/rustbox-tmux daemon"
+        ));
+        assert!(!command_looks_like_rustbox_daemon(
+            "/usr/bin/tmux attach-session"
+        ));
+    }
+
+    #[test]
+    fn ownership_check_only_keeps_the_matching_pid_alive() {
+        assert!(daemon_pid_matches(Some("12345"), 12345));
+        assert!(!daemon_pid_matches(Some("99999"), 12345));
+        assert!(!daemon_pid_matches(None, 12345));
+        assert!(!daemon_pid_matches(Some("not-a-pid"), 12345));
     }
 }
