@@ -2,7 +2,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-const FORGE_SECTION_STUB: &str = "#[fg=colour214]▒  --";
+const RESET: &str = "#[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]";
+const FORGE_SECTION_STUB: &str = "#[fg=#282828,bg=#d3869b]  #[fg=#fbf1c7,bg=#282828]--";
 const SHOW_FORGE_SECTION: bool = false;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +33,12 @@ pub fn metrics_section_string() -> String {
     let cpu = cpu_percent().unwrap_or(0);
     let ram = ram_percent().unwrap_or(0);
 
-    format!("#[fg=colour109]▒ 🧠 {cpu}% #[fg=colour108]💾 {ram}%")
+    format!(
+        "{RESET}#[fg=#d79921]🧠 {} #[fg=#d79921]{cpu}% \
+#[fg=#fbf1c7]💾 {} #[fg=#fe8019]{ram}%",
+        usage_blocks(cpu),
+        usage_blocks(ram),
+    )
 }
 
 pub fn current_git_snapshot(path: Option<&Path>) -> Option<GitSnapshot> {
@@ -71,22 +77,25 @@ pub fn current_git_snapshot(path: Option<&Path>) -> Option<GitSnapshot> {
 }
 
 pub fn format_git_section(snapshot: GitSnapshot) -> String {
-    let mut section = format!("#[fg=colour142]▒  {}", snapshot.branch);
+    let mut section = format!(
+        "{RESET}#[fg=#282828,bg=#458588]  #[fg=#fbf1c7,bg=#282828]{}",
+        snapshot.branch
+    );
 
     if snapshot.changed_count > 0 {
-        section.push_str(&format!(" #[fg=colour214] {}", snapshot.changed_count));
+        section.push_str(&format!(" #[fg=#d79921]󰛄 {}", snapshot.changed_count));
     }
 
     if snapshot.insertions_count > 0 {
-        section.push_str(&format!(" #[fg=colour107] {}", snapshot.insertions_count));
+        section.push_str(&format!(" #[fg=#b8bb26] {}", snapshot.insertions_count));
     }
 
     if snapshot.deletions_count > 0 {
-        section.push_str(&format!(" #[fg=colour167] {}", snapshot.deletions_count));
+        section.push_str(&format!(" #[fg=#fb4934] {}", snapshot.deletions_count));
     }
 
     if snapshot.untracked_count > 0 {
-        section.push_str(&format!(" #[fg=colour223] {}", snapshot.untracked_count));
+        section.push_str(&format!(" #[fg=#fabd2f]󰎔 {}", snapshot.untracked_count));
     }
 
     section
@@ -258,6 +267,16 @@ fn clamp_percent(value: i64) -> u8 {
     value.clamp(0, 100) as u8
 }
 
+fn usage_blocks(percent: u8) -> &'static str {
+    match percent {
+        0..=12 => "□□□□",
+        13..=37 => "■□□□",
+        38..=62 => "■■□□",
+        63..=87 => "■■■□",
+        _ => "■■■■",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -334,7 +353,7 @@ mod tests {
 
         assert_eq!(
             format_git_section(snapshot),
-            "#[fg=colour142]▒  main #[fg=colour214] 2 #[fg=colour107] 5 #[fg=colour167] 1 #[fg=colour223] 3"
+            "#[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]#[fg=#282828,bg=#458588]  #[fg=#fbf1c7,bg=#282828]main #[fg=#d79921]󰛄 2 #[fg=#b8bb26] 5 #[fg=#fb4934] 1 #[fg=#fabd2f]󰎔 3"
         );
     }
 }

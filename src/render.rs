@@ -1,4 +1,4 @@
-const STATUS_SEPARATOR: &str = "#[fg=colour244] | ";
+const STATUS_SEPARATOR: &str = " ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderState {
@@ -69,7 +69,7 @@ mod tests {
 
         assert_eq!(
             output,
-            "#[fg=colour142]▒  main#[fg=colour244] | #[fg=colour214]▒  --#[fg=colour244] | #[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%"
+            "#[fg=colour142]▒  main #[fg=colour214]▒  -- #[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%"
         );
     }
 
@@ -86,7 +86,7 @@ mod tests {
 
         assert_eq!(
             renderer.render(&state),
-            "#[fg=colour142]▒  main#[fg=colour244] | #[fg=colour214]▒  --#[fg=colour244] | #[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%"
+            "#[fg=colour142]▒  main #[fg=colour214]▒  -- #[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%"
         );
         assert_eq!(first_ptr, second_ptr);
     }
@@ -102,10 +102,7 @@ mod tests {
 
         render_status(&state, &mut output);
 
-        assert_eq!(
-            output,
-            "git#[fg=colour244] | forge#[fg=colour244] | metrics"
-        );
+        assert_eq!(output, "git forge metrics");
     }
 
     #[test]
@@ -119,6 +116,6 @@ mod tests {
 
         render_status(&state, &mut output);
 
-        assert_eq!(output, "git#[fg=colour244] | metrics");
+        assert_eq!(output, "git metrics");
     }
 }
