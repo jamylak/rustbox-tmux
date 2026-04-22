@@ -29,6 +29,8 @@ const LEGACY_CODEX_ICON: &str = "@gruvbox-tmux_codex_icon";
 const CONTEXT_HOOKS: &[&str] = &[
     "after-select-pane",
     "after-select-window",
+    "pane-exited",
+    "window-unlinked",
     "after-new-window",
     "after-split-window",
     "client-attached",
@@ -356,6 +358,8 @@ pub fn configure_theme(binary_path: &str) -> Result<(), String> {
     // Hook map:
     // - `after-select-pane`   : user focused a different pane
     // - `after-select-window` : user focused a different window
+    // - `pane-exited`         : the active pane died and tmux focused a survivor
+    // - `window-unlinked`     : a window disappeared from the session/window set
     // - `after-new-window`    : a new window appeared with a new cwd/context
     // - `after-split-window`  : a new pane appeared with a new cwd/context
     // - `client-attached`     : seed status when a client first attaches
@@ -660,6 +664,8 @@ mod tests {
     fn installs_session_created_among_context_hooks() {
         assert!(CONTEXT_HOOKS.contains(&"session-created"));
         assert!(CONTEXT_HOOKS.contains(&"client-attached"));
+        assert!(CONTEXT_HOOKS.contains(&"pane-exited"));
+        assert!(CONTEXT_HOOKS.contains(&"window-unlinked"));
     }
 
     #[test]
