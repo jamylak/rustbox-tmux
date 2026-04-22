@@ -8,6 +8,24 @@ pub const GIT_REFRESH_OPTION: &str = "@rustbox_git_refresh_seconds";
 pub const ENABLED_OPTION: &str = "@rustbox_enabled";
 pub const DEFAULT_GIT_REFRESH_SECS: u64 = 30;
 const HOOKS_INSTALLED_OPTION: &str = "@rustbox_hooks_installed";
+const THEME_BACKGROUND: &str = "#282828";
+const THEME_FOREGROUND: &str = "#fbf1c7";
+const THEME_BLUE: &str = "#458588";
+const THEME_BBLACK: &str = "#32302F";
+const THEME_BBLUE: &str = "#83a598";
+const THEME_BGREEN: &str = "#b8bb26";
+const THEME_BPURPLE: &str = "#d3869b";
+const THEME_BWHITE: &str = "#EBDBB2";
+const THEME_YELLOW: &str = "#d79921";
+const RESET: &str = "#[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]";
+const LEGACY_WINDOW_ID_STYLE: &str = "@gruvbox-tmux_window_id_style";
+const LEGACY_PANE_ID_STYLE: &str = "@gruvbox-tmux_pane_id_style";
+const LEGACY_ZOOM_ID_STYLE: &str = "@gruvbox-tmux_zoom_id_style";
+const LEGACY_TERMINAL_ICON: &str = "@gruvbox-tmux_terminal_icon";
+const LEGACY_ACTIVE_TERMINAL_ICON: &str = "@gruvbox-tmux_active_terminal_icon";
+const LEGACY_CLAUDE_ICON: &str = "@gruvbox-tmux_claude_icon";
+const LEGACY_COPILOT_ICON: &str = "@gruvbox-tmux_copilot_icon";
+const LEGACY_CODEX_ICON: &str = "@gruvbox-tmux_codex_icon";
 
 pub fn publish_status(status: &str) -> Result<(), String> {
     set_option(STATUS_OPTION, status)
@@ -145,15 +163,84 @@ pub fn theme_enabled() -> bool {
     )
 }
 
-// Minimal tmux setup for the current Rust status-right feature set only.
+// Theme bootstrap 🎨
 //
-// Result:
-// 1. `status-right` reads `#{@rustbox_status_right}`
-// 2. a few context-change hooks run `rustbox-tmux publish`
-// 3. reloads stay idempotent instead of stacking duplicate hooks
+// `render.rs` only builds the live right-side payload.
+// The rest of the screenshot look comes from tmux format strings configured
+// here:
+//
+// rustbox init
+//   -> set palette-driven tmux options
+//   -> set left status + window tab formats
+//   -> point `status-right` at `#{@rustbox_status_right}`
+//   -> install refresh hooks once
+//
+// So if rustbox "looks nothing like gruvbox-tmux", this function is the place
+// that fixes it.
 pub fn configure_theme(binary_path: &str) -> Result<(), String> {
+    let window_id_style =
+        show_option(LEGACY_WINDOW_ID_STYLE).unwrap_or_else(|| "digital".to_string());
+    let pane_id_style = show_option(LEGACY_PANE_ID_STYLE).unwrap_or_else(|| "hsquare".to_string());
+    let zoom_id_style = show_option(LEGACY_ZOOM_ID_STYLE).unwrap_or_else(|| "dsquare".to_string());
+    let terminal_icon = show_option(LEGACY_TERMINAL_ICON).unwrap_or_else(|| "".to_string());
+    let active_terminal_icon =
+        show_option(LEGACY_ACTIVE_TERMINAL_ICON).unwrap_or_else(|| "".to_string());
+    let claude_icon = show_option(LEGACY_CLAUDE_ICON).unwrap_or_else(|| "🌼".to_string());
+    let copilot_icon = show_option(LEGACY_COPILOT_ICON).unwrap_or_else(|| "🐙".to_string());
+    let codex_icon = show_option(LEGACY_CODEX_ICON).unwrap_or_else(|| "🤖".to_string());
+
+    let window_icon =
+        build_app_icon_format(&terminal_icon, &claude_icon, &copilot_icon, &codex_icon);
+    let active_window_icon = build_app_icon_format(
+        &active_terminal_icon,
+        &claude_icon,
+        &copilot_icon,
+        &codex_icon,
+    );
+    let window_number = build_number_format("#I", &window_id_style);
+    let custom_pane = build_number_format("#P", &pane_id_style);
+    let zoom_number = build_number_format("#P", &zoom_id_style);
+
+    set_option("status-left-length", "80")?;
     set_option("status-right", "#{@rustbox_status_right}")?;
-    set_option("status-right-length", "160")?;
+    set_option("status-right-length", "220")?;
+    set_option(
+        "mode-style",
+        &format!("fg={THEME_BACKGROUND},bg={THEME_FOREGROUND},reverse"),
+    )?;
+    set_option(
+        "message-style",
+        &format!("bg={THEME_BBLUE},fg={THEME_BACKGROUND},bold"),
+    )?;
+    set_option(
+        "message-command-style",
+        &format!("fg={THEME_FOREGROUND},bg={THEME_BACKGROUND},bold"),
+    )?;
+    set_option("pane-border-style", &format!("fg={THEME_BBLACK}"))?;
+    set_option(
+        "pane-active-border-style",
+        &format!("fg={THEME_BWHITE},bold"),
+    )?;
+    set_option("pane-border-status", "off")?;
+    set_option(
+        "status-style",
+        &format!("fg={THEME_FOREGROUND},bg={THEME_BACKGROUND}"),
+    )?;
+    set_option("window-status-separator", "")?;
+    set_option("status-left", &status_left_format())?;
+    set_option(
+        "window-status-current-format",
+        &window_status_current_format(
+            &active_window_icon,
+            &window_number,
+            &zoom_number,
+            &custom_pane,
+        ),
+    )?;
+    set_option(
+        "window-status-format",
+        &window_status_format(&window_icon, &window_number, &zoom_number, &custom_pane),
+    )?;
     set_option(ENABLED_OPTION, "1")?;
     if show_option(GIT_REFRESH_OPTION).is_none() {
         set_option(GIT_REFRESH_OPTION, &DEFAULT_GIT_REFRESH_SECS.to_string())?;
@@ -223,10 +310,142 @@ fn append_hook(name: &str, command: &str) -> Result<(), String> {
     }
 }
 
+fn status_left_format() -> String {
+    format!(
+        "#[fg={THEME_FOREGROUND},bg={THEME_BLUE},bold] \
+#{{
+?client_prefix,🚀 ,#{{?pane_in_mode,👀 ,🔮 }}
+}}#[bold,nodim]#S "
+    )
+    .replace('\n', "")
+}
+
+fn window_status_current_format(
+    active_window_icon: &str,
+    window_number: &str,
+    zoom_number: &str,
+    custom_pane: &str,
+) -> String {
+    format!(
+        "{RESET}#[fg={THEME_BGREEN},bg={THEME_BBLACK}] {active_window_icon}\
+#[fg={THEME_BPURPLE},bold,nodim]{window_number}#W\
+#[nobold]#{{?window_zoomed_flag, {zoom_number}, {custom_pane}}}#{{?window_last_flag, ,}}"
+    )
+}
+
+fn window_status_format(
+    window_icon: &str,
+    window_number: &str,
+    zoom_number: &str,
+    custom_pane: &str,
+) -> String {
+    format!(
+        "{RESET}#[fg={THEME_FOREGROUND}] {window_icon}{RESET}{window_number}#W\
+#[nobold,dim]#{{?window_zoomed_flag, {zoom_number}, {custom_pane}}}\
+#[fg={THEME_YELLOW}]#{{?window_last_flag, ,}}"
+    )
+}
+
+// Number formatter 🔢
+//
+// tmux does the substitution lazily:
+// `#I`
+//   -> nested `#{s|...|...|:...}` transforms
+//   -> fancy window/pane digit glyphs at draw time
+//
+// This matches the old shell theme so the active tab numbers still look the
+// same without keeping a Bash implementation around.
+fn build_number_format(value_format: &str, style_name: &str) -> String {
+    let digits = match style_name {
+        "hide" => return String::new(),
+        "fsquare" => ["󰎡", "󰎤", "󰎧", "󰎪", "󰎭", "󰎱", "󰎳", "󰎶", "󰎹", "󰎼"],
+        "hsquare" => ["󰎣", "󰎦", "󰎩", "󰎬", "󰎮", "󰎰", "󰎵", "󰎸", "󰎻", "󰎾"],
+        "dsquare" => ["󰎢", "󰎥", "󰎨", "󰎫", "󰎲", "󰎯", "󰎴", "󰎷", "󰎺", "󰎽"],
+        "super" => ["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"],
+        "sub" => ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"],
+        "earabic" => ["٠", "١", "٢", "٣", "٤", "٥", "٦", "٧", "٨", "٩"],
+        _ => ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+    };
+
+    let mut format = value_format.to_string();
+    for (index, digit) in digits.iter().enumerate() {
+        format = format!("#{{s|{index}|{digit} |:{format}}}");
+    }
+    format
+}
+
+// App icon rules 🤖
+//
+// tmux evaluates this giant nested conditional using `#{pane_current_command}`.
+// That lets each tab pick the same icon set your gruvbox theme already used:
+//
+// `nvim`  -> ``
+// `fish`  -> `🐟`
+// `codex` -> `🤖`
+// fallback -> terminal icon
+fn build_app_icon_format(
+    default_icon: &str,
+    claude_icon: &str,
+    copilot_icon: &str,
+    codex_icon: &str,
+) -> String {
+    let mut format = format!("{default_icon} ");
+    let codex = format!("{codex_icon} ");
+    let copilot = format!("{copilot_icon} ");
+    let claude = format!("{claude_icon} ");
+
+    for (pattern, icon) in [
+        ("^emacs(client)?$", "λ "),
+        ("^(nu|nushell)$", "◉ "),
+        ("^go$", "🐹 "),
+        ("^psql$", "🐘 "),
+        ("^uvicorn$", "🦄 "),
+        ("^(uv|uvx|python.*)$", "🐍 "),
+        ("^(cargo|rustc|rustup)$", "🦀 "),
+        ("^deno$", "🦕 "),
+        ("^bun$", "🥟 "),
+        ("^yarn$", "🧶 "),
+        ("^pnpm$", "📫 "),
+        ("^node$", "⬢ "),
+        ("^(npm|npx)$", "📦 "),
+        ("^(docker|docker-compose)$", "🐳 "),
+        ("^(terraform|tofu)$", "💠 "),
+        ("^gcloud$", "☁️ "),
+        ("^glab$", " "),
+        ("^gh$", " "),
+        ("^tmux$", "🧩 "),
+        ("^fish$", "🐟 "),
+        ("^btop$", "📈 "),
+        ("^lazygit$", " "),
+        ("^yazi$", "🗂️ "),
+        ("^(nvim|vim)$", " "),
+        ("^(hx|helix)$", "⌘ "),
+        ("^(codex|codex-.*)$", codex.as_str()),
+        (
+            "^(copilot|copilot-.*|github-copilot-cli|github-copilot-cli-.*|copilot-cli|copilot-cli-.*)$",
+            copilot.as_str(),
+        ),
+        (
+            "^(claude|claude-.*|claude-code|claude-code-.*)$",
+            claude.as_str(),
+        ),
+        ("^ssh$", "󰣀 "),
+    ] {
+        format = build_icon_rule(pattern, icon, &format);
+    }
+
+    format
+}
+
+fn build_icon_rule(pattern: &str, icon: &str, fallback: &str) -> String {
+    format!("#{{?#{{m/ri:{pattern},#{{pane_current_command}}}},{icon},{fallback}}}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        current_session_id, refresh_args, set_option_args, theme_enabled, ACTIVE_PATH_OPTION,
+        build_app_icon_format, build_number_format, current_session_id, refresh_args,
+        set_option_args, status_left_format, theme_enabled, ACTIVE_PATH_OPTION,
         DAEMON_PID_OPTION, DEFAULT_GIT_REFRESH_SECS, ENABLED_OPTION, GIT_REFRESH_OPTION,
         STATUS_OPTION,
     };
@@ -261,5 +480,34 @@ mod tests {
     #[test]
     fn current_session_lookup_returns_none_without_tmux() {
         let _ = current_session_id();
+    }
+
+    #[test]
+    fn builds_digital_number_format() {
+        assert_eq!(
+            build_number_format("#I", "digital"),
+            "#{s|9|9 |:#{s|8|8 |:#{s|7|7 |:#{s|6|6 |:#{s|5|5 |:#{s|4|4 |:#{s|3|3 |:#{s|2|2 |:#{s|1|1 |:#{s|0|0 |:#I}}}}}}}}}}"
+        );
+    }
+
+    #[test]
+    fn hides_number_format_when_requested() {
+        assert_eq!(build_number_format("#I", "hide"), "");
+    }
+
+    #[test]
+    fn builds_icon_format_with_terminal_fallback_and_codex_match() {
+        let format = build_app_icon_format("", "🌼", "🐙", "🤖");
+        assert!(format.contains("pane_current_command"));
+        assert!(format.contains("🤖 "));
+        assert!(format.contains(" "));
+    }
+
+    #[test]
+    fn builds_exact_status_left_format() {
+        assert_eq!(
+            status_left_format(),
+            "#[fg=#fbf1c7,bg=#458588,bold] #{?client_prefix,🚀 ,#{?pane_in_mode,👀 ,🔮 }}#[bold,nodim]#S "
+        );
     }
 }
