@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -8,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use crate::render::{RenderState, Renderer};
 use crate::tmux::{
-    current_pane_path, current_session_id, disable_theme, publish_status, refresh_status_line,
-    set_option, show_option, theme_enabled, ACTIVE_PATH_OPTION, DAEMON_PID_OPTION,
+    current_pane_path, current_session_id, disable_theme, list_session_ids, publish_status,
+    publish_status_for_session, refresh_status_line, set_option, set_session_option, show_option,
+    show_session_option, theme_enabled, ACTIVE_PATH_OPTION, DAEMON_PID_OPTION,
     DEFAULT_GIT_REFRESH_SECS, GIT_REFRESH_OPTION, STATUS_OPTION,
 };
 use crate::widgets::{forge_section, git_section_string, metrics_section_string};
@@ -85,7 +87,7 @@ pub fn publish_once(path: Option<&Path>) -> Result<(), String> {
 
     let resolved_path = resolve_render_path(path);
     if let Some(path) = resolved_path.as_deref() {
-        set_option(ACTIVE_PATH_OPTION, &path.to_string_lossy())?;
+        remember_active_path(path)?;
     }
 
     let state = current_render_state(resolved_path.as_deref());
@@ -164,8 +166,8 @@ fn run_idle_loop(mut state: DaemonState) -> ! {
     }
 }
 
-// Prefer an explicit CLI path, then the live tmux pane path, then the last
-// remembered tmux path, and finally the process cwd as a fallback.
+// Prefer an explicit CLI path, then the live tmux pane path, then the
+// current session's remembered tmux path, and finally the process cwd.
 fn resolve_render_path(path: Option<&Path>) -> Option<PathBuf> {
     path.map(Path::to_path_buf)
         .or_else(current_pane_path)
@@ -174,26 +176,113 @@ fn resolve_render_path(path: Option<&Path>) -> Option<PathBuf> {
 }
 
 fn active_path() -> Option<PathBuf> {
-    show_option(ACTIVE_PATH_OPTION).map(PathBuf::from)
+    // Session-first path lookup 🧭
+    //
+    current_session_id()
+        .and_then(|session_id| show_session_option(&session_id, ACTIVE_PATH_OPTION))
+        .map(PathBuf::from)
 }
 
 fn publish_with_daemon_state(path: Option<&Path>, state: &mut DaemonState) -> Result<(), String> {
+    // Publish router 🚦
+    //
+    // Two modes exist now:
+    //
+    // 1. direct publish (`rustbox-tmux publish`)
+    //    -> we know which currently-focused session changed
+    //    -> update just that session
+    //
+    // 2. background daemon tick
+    //    -> no explicit path/session came in
+    //    -> refresh every remembered session in the server
+    //
+    // This split is what fixes the "three tabs, three sessions, one server"
+    // case without needing one daemon per session.
+    if path.is_some() {
+        publish_current_session(path, state)?;
+    } else {
+        publish_all_sessions(state)?;
+    }
+
+    refresh_status_line()?;
+    Ok(())
+}
+
+fn publish_current_session(path: Option<&Path>, state: &mut DaemonState) -> Result<(), String> {
+    // Focused-session fast path ⚡
+    //
+    // Hook fires / manual publish runs
+    //   -> resolve the active repo path for the current session
+    //   -> remember it on that session
+    //   -> refresh only that session's git cache
+    //   -> publish only that session's rendered status
+    //
+    // This keeps hook-driven updates cheap and avoids stomping unrelated
+    // sessions that happen to live on the same tmux server.
     if !theme_enabled() {
         return Ok(());
     }
 
     let resolved_path = resolve_render_path(path);
     if let Some(path) = resolved_path.as_deref() {
-        set_option(ACTIVE_PATH_OPTION, &path.to_string_lossy())?;
+        remember_active_path(path)?;
     }
 
-    let git_section = state.git_cache.section_for(resolved_path.as_deref());
+    let session_id = current_session_id()
+        .ok_or_else(|| "failed to determine current tmux session".to_string())?;
+
+    let git_section = state.git_section_for_session(&session_id, resolved_path.as_deref());
     let render_state = current_render_state_with_git_section(git_section);
     let mut renderer = Renderer::new();
-    publish_status(renderer.render(&render_state))?;
-    refresh_status_line()?;
+    publish_status_for_session(&session_id, renderer.render(&render_state))?;
 
     Ok(())
+}
+
+fn publish_all_sessions(state: &mut DaemonState) -> Result<(), String> {
+    // Daemon fan-out refresh 🌐
+    //
+    // One daemon still owns one tmux server, but the server may have many
+    // sessions, each pinned to a different repo. So every background wake-up:
+    //
+    // tmux server
+    //   -> list sessions
+    //   -> read each session's remembered path
+    //   -> refresh that session's cached git section if needed
+    //   -> publish that session's private status payload
+    //
+    // Metrics are still global/live-per-render, but git context is now kept
+    // isolated per session so switching tabs no longer cross-contaminates the
+    // branch/ahead/dirty widget.
+    if !theme_enabled() {
+        return Ok(());
+    }
+
+    let session_ids = list_session_ids();
+    if session_ids.is_empty() {
+        // Detached server / no sessions attached yet:
+        // nothing session-scoped exists to refresh.
+        return Ok(());
+    }
+
+    let mut renderer = Renderer::new();
+    for session_id in session_ids {
+        let path = show_session_option(&session_id, ACTIVE_PATH_OPTION).map(PathBuf::from);
+        let git_section = state.git_section_for_session(&session_id, path.as_deref());
+        let render_state = current_render_state_with_git_section(git_section);
+        publish_status_for_session(&session_id, renderer.render(&render_state))?;
+    }
+
+    Ok(())
+}
+fn remember_active_path(path: &Path) -> Result<(), String> {
+    // Session memory write 📝
+    //
+    // That remembered path is what lets the background daemon keep repo A tied
+    // to session A and repo B tied to session B between focus changes.
+    let session_id = current_session_id()
+        .ok_or_else(|| "failed to determine current tmux session".to_string())?;
+    set_session_option(&session_id, ACTIVE_PATH_OPTION, &path.to_string_lossy())
 }
 
 fn git_refresh_interval_secs() -> u64 {
@@ -282,14 +371,32 @@ fn stop_process(pid: u32) -> Result<(), String> {
 }
 
 struct DaemonState {
-    git_cache: GitSectionCache,
+    // Per-session git memory 🧠
+    //
+    // Key: tmux session id like `$1`
+    // Val: cached git widget state for that session's remembered repo
+    git_caches: HashMap<String, GitSectionCache>,
+    git_refresh_interval: Duration,
 }
 
 impl DaemonState {
     fn new(git_refresh_secs: u64) -> Self {
         Self {
-            git_cache: GitSectionCache::new(Duration::from_secs(git_refresh_secs)),
+            git_caches: HashMap::new(),
+            git_refresh_interval: Duration::from_secs(git_refresh_secs),
         }
+    }
+
+    fn git_section_for_session(&mut self, session_id: &str, path: Option<&Path>) -> String {
+        // Cache ownership rule 👑
+        //
+        // Each session gets its own git cache entry. That means:
+        // session `$1` changing repos does not invalidate session `$2`
+        // session `$2` staying idle does not lose its last git snapshot
+        self.git_caches
+            .entry(session_id.to_string())
+            .or_insert_with(|| GitSectionCache::new(self.git_refresh_interval))
+            .section_for(path)
     }
 }
 
@@ -388,6 +495,19 @@ impl GitSectionCache {
     // same path + interval ok -> reuse cached section
     // same path + stale       -> refresh now
     fn section_for(&mut self, path: Option<&Path>) -> String {
+        // Git refresh policy ⏱️
+        //
+        // path changed
+        //   -> refresh immediately because repo context is different
+        //
+        // same path + cache still fresh
+        //   -> reuse the old git section
+        //
+        // same path + cache expired
+        //   -> refresh now
+        //
+        // This is the piece that keeps the daemon responsive without running
+        // `git` constantly on every 5s metrics wake-up.
         let path_changed = self.repo_path.as_deref() != path;
         let refresh_due = self
             .refreshed_at
@@ -408,7 +528,7 @@ impl GitSectionCache {
 mod tests {
     use super::{
         command_looks_like_rustbox_daemon, current_render_state, daemon_pid_matches, DaemonState,
-        PATH_SUBSCRIPTION_FORMAT,
+        GitSectionCache, PATH_SUBSCRIPTION_FORMAT,
     };
     use crate::widgets::{forge_section, git_section_string};
     use std::path::Path;
@@ -427,13 +547,13 @@ mod tests {
     #[test]
     fn refreshes_git_cache_when_repo_changes() {
         let mut state = DaemonState::new(30);
-        let first = state.git_cache.section_for(Some(Path::new("/tmp/one")));
-        let second = state.git_cache.section_for(Some(Path::new("/tmp/two")));
+        let first = state.git_section_for_session("$1", Some(Path::new("/tmp/one")));
+        let second = state.git_section_for_session("$1", Some(Path::new("/tmp/two")));
 
         assert_eq!(first, "");
         assert_eq!(second, "");
         assert_eq!(
-            state.git_cache.repo_path.as_deref(),
+            state.git_caches["$1"].repo_path.as_deref(),
             Some(Path::new("/tmp/two"))
         );
     }
@@ -441,14 +561,35 @@ mod tests {
     #[test]
     fn keeps_git_cache_until_interval_expires() {
         let mut state = DaemonState::new(30);
-        state.git_cache.repo_path = Some(Path::new("/tmp/demo").to_path_buf());
-        state.git_cache.section = "cached".to_string();
-        state.git_cache.refreshed_at = Some(Instant::now());
-        state.git_cache.refresh_interval = Duration::from_secs(30);
+        let cache = state
+            .git_caches
+            .entry("$1".to_string())
+            .or_insert_with(|| GitSectionCache::new(state.git_refresh_interval));
+        cache.repo_path = Some(Path::new("/tmp/demo").to_path_buf());
+        cache.section = "cached".to_string();
+        cache.refreshed_at = Some(Instant::now());
+        cache.refresh_interval = Duration::from_secs(30);
 
         assert_eq!(
-            state.git_cache.section_for(Some(Path::new("/tmp/demo"))),
+            state.git_section_for_session("$1", Some(Path::new("/tmp/demo"))),
             "cached"
+        );
+    }
+
+    #[test]
+    fn keeps_independent_git_caches_per_session() {
+        let mut state = DaemonState::new(30);
+
+        state.git_section_for_session("$1", Some(Path::new("/tmp/one")));
+        state.git_section_for_session("$2", Some(Path::new("/tmp/two")));
+
+        assert_eq!(
+            state.git_caches["$1"].repo_path.as_deref(),
+            Some(Path::new("/tmp/one"))
+        );
+        assert_eq!(
+            state.git_caches["$2"].repo_path.as_deref(),
+            Some(Path::new("/tmp/two"))
         );
     }
 

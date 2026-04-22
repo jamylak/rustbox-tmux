@@ -32,11 +32,35 @@ const CONTEXT_HOOKS: &[&str] = &[
     "after-new-window",
     "after-split-window",
     "client-attached",
+    "client-session-changed",
     "session-created",
 ];
 
 pub fn publish_status(status: &str) -> Result<(), String> {
-    set_option(STATUS_OPTION, status)
+    // Session-aware publish route 🎯
+    //
+    // current session
+    //   -> write that session's private `@rustbox_status_right`
+    //
+    // There is no global fallback anymore. The whole point of this fix is to
+    // make session scope the one real model instead of a side-path.
+    let session_id = current_session_id()
+        .ok_or_else(|| "failed to determine current tmux session".to_string())?;
+    publish_status_for_session(&session_id, status)
+}
+
+pub fn publish_status_for_session(session_id: &str, status: &str) -> Result<(), String> {
+    // tmux session store 📦
+    //
+    // `status-right` still expands `#{@rustbox_status_right}`, but tmux lets
+    // each session carry its own value for that user option.
+    //
+    // So the rendering model is now:
+    // session `$1` -> `@rustbox_status_right = "...repo A..."`
+    // session `$2` -> `@rustbox_status_right = "...repo B..."`
+    //
+    // The format string stays stable while the data behind it becomes scoped.
+    set_session_option(session_id, STATUS_OPTION, status)
 }
 
 // `refresh-client -S` fails when there is no attached client; treat that as a
@@ -89,28 +113,81 @@ pub fn set_option(name: &str, value: &str) -> Result<(), String> {
 }
 
 pub fn show_option(name: &str) -> Option<String> {
-    // Read path:
-    // rustbox -> `tmux show-option -gv <name>` -> current tmux value
+    // Global option store 🌍
     //
-    // Return `None` when:
-    // - tmux rejects the lookup
-    // - the value is not valid UTF-8
-    // - the value is empty after trimming
+    // This is still used for truly server-wide rustbox state like daemon pid
+    // and refresh cadence. Session-specific state should go through the
+    // session-targeted helpers below.
     let output = Command::new("tmux")
         .args(["show-option", "-gv", name])
         .output()
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
+    parse_option_output(output)
+}
 
-    let value = String::from_utf8(output.stdout).ok()?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
+pub fn set_session_option(session_id: &str, name: &str, value: &str) -> Result<(), String> {
+    // Session-scoped write path 🧭
+    //
+    // `-t <session>` is the critical bit here. Without it, tmux writes to the
+    // global option store and every session inside the same server sees the
+    // same rustbox state.
+    let status = Command::new("tmux")
+        .args(["set-option", "-q", "-t", session_id, name, value])
+        .status()
+        .map_err(|error| {
+            format!("failed to run tmux set-option for session {session_id} {name}: {error}")
+        })?;
+
+    if status.success() {
+        Ok(())
     } else {
-        Some(trimmed.to_string())
+        Err(format!(
+            "tmux set-option for session {session_id} {name} exited with status {status}"
+        ))
     }
+}
+
+pub fn show_session_option(session_id: &str, name: &str) -> Option<String> {
+    // Session-scoped read path 🔎
+    //
+    // The daemon uses this to recover the last path/status remembered for a
+    // specific session, instead of assuming there is one universal active path
+    // for the whole tmux server.
+    let output = Command::new("tmux")
+        .args(["show-option", "-qv", "-t", session_id, name])
+        .output()
+        .ok()?;
+    parse_option_output(output)
+}
+
+pub fn list_session_ids() -> Vec<String> {
+    // Server -> sessions fan-out list 🗂️
+    //
+    // One daemon still owns one tmux server, but it now needs to refresh the
+    // cached status for every session living inside that server.
+    //
+    // `list-sessions -F "#{session_id}"`
+    //   -> ["$1", "$2", "$3", ...]
+    //   -> daemon iterates each one
+    let output = match Command::new("tmux")
+        .args(["list-sessions", "-F", "#{session_id}"])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|stdout| {
+            stdout
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn current_pane_path() -> Option<PathBuf> {
@@ -146,6 +223,27 @@ pub fn current_session_id() -> Option<String> {
         .args(["display-message", "-p", "#{session_id}"])
         .output()
         .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let value = String::from_utf8(output.stdout).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn parse_option_output(output: std::process::Output) -> Option<String> {
+    // Shared output parser ✂️
+    //
+    // Both global and session-scoped tmux reads return the same shape:
+    // process output -> UTF-8 text -> trim -> maybe value
+    //
+    // Centralizing this keeps the "missing/empty means None" rule identical
+    // across both storage scopes.
     if !output.status.success() {
         return None;
     }
@@ -261,6 +359,7 @@ pub fn configure_theme(binary_path: &str) -> Result<(), String> {
     // - `after-new-window`    : a new window appeared with a new cwd/context
     // - `after-split-window`  : a new pane appeared with a new cwd/context
     // - `client-attached`     : seed status when a client first attaches
+    // - `client-session-changed`: follow `switch-client -t ...`
     // - `session-created`     : a brand-new `tmux new-session -c ...` picked
     //                           its initial cwd before any later daemon tick
     //
@@ -292,6 +391,20 @@ pub fn disable_theme() -> Result<(), String> {
 
     set_option(STATUS_OPTION, "")?;
     set_option(ACTIVE_PATH_OPTION, "")?;
+
+    // Session cleanup sweep 🧹
+    //
+    // Now that rustbox keeps per-session copies of these options, `stop`
+    // needs to blank all of them or detached/older sessions could keep stale
+    // status payloads around in tmux memory.
+    //
+    // tmux server
+    //   -> list sessions
+    //   -> clear rustbox state in each session
+    for session_id in list_session_ids() {
+        set_session_option(&session_id, STATUS_OPTION, "")?;
+        set_session_option(&session_id, ACTIVE_PATH_OPTION, "")?;
+    }
     refresh_status_line()
 }
 
