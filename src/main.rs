@@ -58,8 +58,8 @@ fn main() -> ExitCode {
 //
 // Diagram:
 // 1. configure tmux so `status-right` reads `#{@rustbox_status_right}`
-// 2. publish one fresh value right now
-// 3. ensure one background updater exists for later refreshes
+// 2. ensure one background updater exists for later refreshes
+// 3. publish one fresh value right now when tmux already has a current session
 fn run_init() -> Result<(), String> {
     let binary_path =
         env::current_exe().map_err(|error| format!("failed to locate binary: {error}"))?;
@@ -68,8 +68,26 @@ fn run_init() -> Result<(), String> {
         .ok_or_else(|| "binary path is not valid UTF-8".to_string())?;
 
     tmux::configure_theme(binary_path)?;
-    daemon::publish_once(None)?;
+
+    // Bootstrap order fix 🧱
+    //
+    // tmux may invoke `run-shell ".../rustbox.tmux"` while it is still parsing
+    // config, before a current session/client exists. In that phase:
+    //
+    // - `publish_once()` can fail because session-scoped tmux lookups are not
+    //   ready yet
+    // - but starting the daemon is still safe and should not be blocked
+    //
+    // So `init` now treats "start the long-lived updater" as the critical
+    // step, and the eager one-shot publish as best-effort icing on top.
     daemon::ensure_daemon(&PathBuf::from(binary_path))?;
+
+    // Best-effort warm publish ✨
+    //
+    // When tmux already has a current session, this seeds the status
+    // immediately. During early config load it may still be too soon, so we
+    // intentionally ignore the error and let the daemon catch up moments later.
+    let _ = daemon::publish_once(None);
 
     Ok(())
 }

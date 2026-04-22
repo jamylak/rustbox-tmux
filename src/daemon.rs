@@ -19,7 +19,7 @@ use crate::widgets::{forge_section, git_section_string, metrics_section_string};
 const METRICS_REFRESH_SECS: u64 = 5;
 const MIN_GIT_REFRESH_SECS: u64 = 5;
 const PATH_SUBSCRIPTION_NAME: &str = "path";
-const PATH_SUBSCRIPTION_FORMAT: &str = "path:%*:#{pane_id} #{pane_current_path}";
+const PATH_SUBSCRIPTION_FORMAT: &str = "path:%*:#{pane_current_path}";
 
 // Replace the previous daemon on `init` so config reloads pick up a rebuilt
 // binary instead of leaving an old process running forever.
@@ -51,6 +51,7 @@ pub fn run_daemon() -> Result<(), String> {
     let mut state = DaemonState::new(git_refresh_interval_secs());
     set_option(DAEMON_PID_OPTION, &std::process::id().to_string())?;
     publish_with_daemon_state(None, &mut state)?;
+    refresh_status_line()?;
 
     log_startup();
 
@@ -152,15 +153,29 @@ fn run_idle_loop(mut state: DaemonState) -> ! {
         match path_subscription.as_ref().map(|subscription| {
             subscription.wait_for_change(Duration::from_secs(METRICS_REFRESH_SECS))
         }) {
-            Some(Ok(PathEvent::Changed)) | Some(Err(RecvTimeoutError::Timeout)) => {
-                let _ = publish_with_daemon_state(None, &mut state);
+            Some(Ok(PathEvent::Changed { session_id, path })) => {
+                // Fast lane 🚀
+                //
+                // A plain shell `cd` does not fire our tmux hooks, but tmux's
+                // control-mode path subscription does emit here. That makes
+                // this branch the "instant git update on cwd change" path.
+                if publish_session_for_path_change(&session_id, &path, &mut state).is_ok() {
+                    let _ = refresh_status_line();
+                }
+            }
+            Some(Err(RecvTimeoutError::Timeout)) => {
+                if publish_with_daemon_state(None, &mut state).is_ok() {
+                    let _ = refresh_status_line();
+                }
             }
             Some(Err(RecvTimeoutError::Disconnected)) => {
                 path_subscription = PathSubscription::attach();
             }
             None => {
                 thread::sleep(Duration::from_secs(METRICS_REFRESH_SECS));
-                let _ = publish_with_daemon_state(None, &mut state);
+                if publish_with_daemon_state(None, &mut state).is_ok() {
+                    let _ = refresh_status_line();
+                }
             }
         }
     }
@@ -275,6 +290,33 @@ fn publish_all_sessions(state: &mut DaemonState) -> Result<(), String> {
 
     Ok(())
 }
+
+fn publish_session_for_path_change(
+    session_id: &str,
+    path: &Path,
+    state: &mut DaemonState,
+) -> Result<(), String> {
+    // tmux path-event publish 🎯
+    //
+    // `%subscription-changed`
+    //   -> tmux tells us exactly which session's pane cwd changed
+    //   -> update only that session's remembered path
+    //   -> refresh only that session's cached git section
+    //   -> repaint without waiting for pane focus/exit hooks
+    if !theme_enabled() {
+        return Ok(());
+    }
+
+    remember_active_path_for_session(session_id, path)?;
+
+    let git_section = state.git_section_for_session(session_id, Some(path));
+    let render_state = current_render_state_with_git_section(git_section);
+    let mut renderer = Renderer::new();
+    publish_status_for_session(session_id, renderer.render(&render_state))?;
+
+    Ok(())
+}
+
 fn remember_active_path(path: &Path) -> Result<(), String> {
     // Session memory write 📝
     //
@@ -282,7 +324,11 @@ fn remember_active_path(path: &Path) -> Result<(), String> {
     // to session A and repo B tied to session B between focus changes.
     let session_id = current_session_id()
         .ok_or_else(|| "failed to determine current tmux session".to_string())?;
-    set_session_option(&session_id, ACTIVE_PATH_OPTION, &path.to_string_lossy())
+    remember_active_path_for_session(&session_id, path)
+}
+
+fn remember_active_path_for_session(session_id: &str, path: &Path) -> Result<(), String> {
+    set_session_option(session_id, ACTIVE_PATH_OPTION, &path.to_string_lossy())
 }
 
 fn git_refresh_interval_secs() -> u64 {
@@ -400,8 +446,11 @@ impl DaemonState {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum PathEvent {
-    Changed,
+    // Keep the event small and concrete:
+    // session scope from tmux metadata + resolved cwd from the subscribed value.
+    Changed { session_id: String, path: PathBuf },
 }
 
 struct PathSubscription {
@@ -448,8 +497,13 @@ impl PathSubscription {
                 let Ok(line) = line else {
                     break;
                 };
-                if line.starts_with(&format!("%subscription-changed {PATH_SUBSCRIPTION_NAME} ")) {
-                    let _ = sender.send(PathEvent::Changed);
+
+                // Control-mode decode ring 🛰️
+                //
+                // We ignore every other tmux control message and only forward
+                // the path-subscription notifications that carry a new cwd.
+                if let Some(event) = parse_path_event(&line) {
+                    let _ = sender.send(event);
                 }
             }
         });
@@ -464,6 +518,36 @@ impl PathSubscription {
     fn wait_for_change(&self, timeout: Duration) -> Result<PathEvent, RecvTimeoutError> {
         self.events.recv_timeout(timeout)
     }
+}
+
+fn parse_path_event(line: &str) -> Option<PathEvent> {
+    // tmux payload shape 📬
+    //
+    // tmux 3.5a reports:
+    // `%subscription-changed name session-id window-id window-index pane-id ... : value`
+    //
+    // We care about:
+    // - `session-id` from the metadata prefix
+    // - `value`, which for our subscription is `#{pane_current_path}`
+    //
+    // Everything between `pane-id` and the ` : ` separator is future-reserved
+    // tmux metadata and is intentionally ignored.
+    let prefix = format!("%subscription-changed {PATH_SUBSCRIPTION_NAME} ");
+    let payload = line.strip_prefix(&prefix)?;
+    let (metadata, path) = payload.split_once(" : ")?;
+    let mut fields = metadata.split_whitespace();
+    let session_id = fields.next()?;
+    fields.next()?;
+    fields.next()?;
+    fields.next()?;
+    if session_id.is_empty() || path.is_empty() {
+        return None;
+    }
+
+    Some(PathEvent::Changed {
+        session_id: session_id.to_string(),
+        path: PathBuf::from(path),
+    })
 }
 
 impl Drop for PathSubscription {
@@ -527,8 +611,8 @@ impl GitSectionCache {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_looks_like_rustbox_daemon, current_render_state, daemon_pid_matches, DaemonState,
-        GitSectionCache, PATH_SUBSCRIPTION_FORMAT,
+        command_looks_like_rustbox_daemon, current_render_state, daemon_pid_matches,
+        parse_path_event, DaemonState, GitSectionCache, PATH_SUBSCRIPTION_FORMAT, PathEvent,
     };
     use crate::widgets::{forge_section, git_section_string};
     use std::path::Path;
@@ -595,10 +679,29 @@ mod tests {
 
     #[test]
     fn path_subscription_targets_all_panes() {
+        assert_eq!(PATH_SUBSCRIPTION_FORMAT, "path:%*:#{pane_current_path}");
+    }
+
+    #[test]
+    fn parses_path_subscription_events() {
+        let event = parse_path_event("%subscription-changed path $1 @0 0 %1 : /tmp/demo")
+            .unwrap();
+
         assert_eq!(
-            PATH_SUBSCRIPTION_FORMAT,
-            "path:%*:#{pane_id} #{pane_current_path}"
+            event,
+            PathEvent::Changed {
+                session_id: "$1".to_string(),
+                path: Path::new("/tmp/demo").to_path_buf(),
+            }
         );
+    }
+
+    #[test]
+    fn ignores_malformed_path_subscription_events() {
+        assert!(parse_path_event("%subscription-changed other $1 /tmp/demo").is_none());
+        assert!(parse_path_event("%subscription-changed path ").is_none());
+        assert!(parse_path_event("%subscription-changed path $1").is_none());
+        assert!(parse_path_event("%subscription-changed path $1 @0 0 %1").is_none());
     }
 
     #[test]

@@ -326,8 +326,8 @@ That split is more reasonable for the current architecture:
 
 - CPU/RAM want a short interval
 - git does not need to be hammered at the same cadence
-- hook-driven `publish` still updates git immediately when pane/window context
-  changes
+- hook-driven `publish` and tmux pane-path events still update git immediately
+  when context changes
 
 So the current answer is:
 
@@ -378,8 +378,8 @@ every 30s by default
   -> git widget shells out to `git`
 ```
 
-Also, every hook-driven `publish` does an immediate git refresh for the current
-pane path.
+Also, every hook-driven `publish` and every tmux pane-path change event does an
+immediate git refresh for the current pane path.
 
 So the current design is:
 
