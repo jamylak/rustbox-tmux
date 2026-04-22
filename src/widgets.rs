@@ -3,16 +3,33 @@ use std::path::Path;
 use std::process::Command;
 
 const RESET: &str = "#[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]";
+const THEME_BACKGROUND: &str = "#282828";
+const THEME_FOREGROUND: &str = "#fbf1c7";
+const THEME_GREEN: &str = "#98971a";
+const THEME_RED: &str = "#cc241d";
+const THEME_YELLOW: &str = "#d79921";
+const THEME_BLACK: &str = "#282828";
+const THEME_BPURPLE: &str = "#d3869b";
+const THEME_BRED: &str = "#fb4934";
 const FORGE_SECTION_STUB: &str = "#[fg=#282828,bg=#d3869b]  #[fg=#fbf1c7,bg=#282828]--";
 const SHOW_FORGE_SECTION: bool = false;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitSnapshot {
     pub branch: String,
+    pub sync_mode: GitSyncMode,
     pub changed_count: u32,
     pub insertions_count: u32,
     pub deletions_count: u32,
     pub untracked_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitSyncMode {
+    Clean,
+    Dirty,
+    NeedPush,
+    RemoteDiff,
 }
 
 pub fn git_section_string(path: Option<&Path>) -> String {
@@ -66,9 +83,17 @@ pub fn current_git_snapshot(path: Option<&Path>) -> Option<GitSnapshot> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .count() as u32;
+    let sync_mode = git_sync_mode(
+        repo_root,
+        changed_count,
+        insertions_count,
+        deletions_count,
+        untracked_count,
+    );
 
     Some(GitSnapshot {
         branch: truncate_branch(branch),
+        sync_mode,
         changed_count,
         insertions_count,
         deletions_count,
@@ -77,25 +102,39 @@ pub fn current_git_snapshot(path: Option<&Path>) -> Option<GitSnapshot> {
 }
 
 pub fn format_git_section(snapshot: GitSnapshot) -> String {
+    let (status_color, status_icon) = git_status_style(snapshot.sync_mode);
     let mut section = format!(
-        "{RESET}#[fg=#282828,bg=#458588]  #[fg=#fbf1c7,bg=#282828]{}",
+        "{RESET}#[bg={THEME_BACKGROUND},fg={status_color},bold]▒ {status_icon} \
+{RESET}#[fg={THEME_FOREGROUND},bg={THEME_BACKGROUND}]{}",
         snapshot.branch
     );
 
     if snapshot.changed_count > 0 {
-        section.push_str(&format!(" #[fg=#d79921]󰛄 {}", snapshot.changed_count));
+        section.push_str(&format!(
+            " {RESET}#[fg={THEME_YELLOW},bg={THEME_BACKGROUND},bold] {}",
+            snapshot.changed_count
+        ));
     }
 
     if snapshot.insertions_count > 0 {
-        section.push_str(&format!(" #[fg=#b8bb26] {}", snapshot.insertions_count));
+        section.push_str(&format!(
+            " {RESET}#[fg={THEME_GREEN},bg={THEME_BACKGROUND},bold] {}",
+            snapshot.insertions_count
+        ));
     }
 
     if snapshot.deletions_count > 0 {
-        section.push_str(&format!(" #[fg=#fb4934] {}", snapshot.deletions_count));
+        section.push_str(&format!(
+            " {RESET}#[fg={THEME_RED},bg={THEME_BACKGROUND},bold] {}",
+            snapshot.deletions_count
+        ));
     }
 
     if snapshot.untracked_count > 0 {
-        section.push_str(&format!(" #[fg=#fabd2f]󰎔 {}", snapshot.untracked_count));
+        section.push_str(&format!(
+            " {RESET}#[fg={THEME_BLACK},bg={THEME_BACKGROUND},bold] {}",
+            snapshot.untracked_count
+        ));
     }
 
     section
@@ -226,6 +265,65 @@ fn parse_macos_cpu_field(line: &str, suffix: &str) -> Option<f64> {
     value.trim().parse().ok()
 }
 
+fn git_sync_mode(
+    repo_root: &str,
+    changed_count: u32,
+    insertions_count: u32,
+    deletions_count: u32,
+    untracked_count: u32,
+) -> GitSyncMode {
+    if changed_count > 0 || insertions_count > 0 || deletions_count > 0 {
+        return GitSyncMode::Dirty;
+    }
+
+    if git_upstream_ahead_count(repo_root).unwrap_or(0) > 0 {
+        return GitSyncMode::NeedPush;
+    }
+
+    if git_has_remote_diff(repo_root) {
+        return GitSyncMode::RemoteDiff;
+    }
+
+    if untracked_count > 0 {
+        return GitSyncMode::NeedPush;
+    }
+
+    GitSyncMode::Clean
+}
+
+fn git_upstream_ahead_count(repo_root: &str) -> Option<u32> {
+    let output =
+        command_output_in_dir(repo_root, "git", &["rev-list", "--count", "@{push}..HEAD"])?;
+    output.trim().parse().ok()
+}
+
+fn git_has_remote_diff(repo_root: &str) -> bool {
+    let Some(upstream) = command_output_in_dir(
+        repo_root,
+        "git",
+        &["rev-parse", "--abbrev-ref", "@{upstream}"],
+    ) else {
+        return false;
+    };
+    let upstream = upstream.trim();
+    if upstream.is_empty() {
+        return false;
+    }
+
+    command_output_in_dir(repo_root, "git", &["diff", "--numstat", "HEAD", upstream])
+        .map(|output| !output.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn git_status_style(mode: GitSyncMode) -> (&'static str, &'static str) {
+    match mode {
+        GitSyncMode::Dirty => (THEME_BRED, "󱓎"),
+        GitSyncMode::NeedPush => (THEME_RED, "󰛃"),
+        GitSyncMode::RemoteDiff => (THEME_BPURPLE, "󰛀"),
+        GitSyncMode::Clean => (THEME_GREEN, ""),
+    }
+}
+
 fn macos_ram_percent_from_pages(
     page_size: u64,
     active: u64,
@@ -315,11 +413,11 @@ fn usage_blocks(percent: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_percent, forge_section, format_git_section, git_section_string,
+        clamp_percent, forge_section, format_git_section, git_section_string, git_status_style,
         macos_ram_percent_from_pages, meminfo_value_kib, metrics_section_string,
         parse_diff_numstat, parse_macos_top_cpu_percent, parse_vm_stat_count,
         parse_vm_stat_page_size, percent_from_used_total, truncate_branch, GitSnapshot,
-        FORGE_SECTION_STUB, SHOW_FORGE_SECTION,
+        GitSyncMode, FORGE_SECTION_STUB, SHOW_FORGE_SECTION,
     };
 
     #[test]
@@ -396,6 +494,7 @@ mod tests {
     fn formats_git_snapshot() {
         let snapshot = GitSnapshot {
             branch: "main".to_string(),
+            sync_mode: GitSyncMode::Dirty,
             changed_count: 2,
             insertions_count: 5,
             deletions_count: 1,
@@ -404,7 +503,15 @@ mod tests {
 
         assert_eq!(
             format_git_section(snapshot),
-            "#[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]#[fg=#282828,bg=#458588]  #[fg=#fbf1c7,bg=#282828]main #[fg=#d79921]󰛄 2 #[fg=#b8bb26] 5 #[fg=#fb4934] 1 #[fg=#fabd2f]󰎔 3"
+            "#[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]#[bg=#282828,fg=#fb4934,bold]▒ 󱓎 #[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]#[fg=#fbf1c7,bg=#282828]main #[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]#[fg=#d79921,bg=#282828,bold] 2 #[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]#[fg=#98971a,bg=#282828,bold] 5 #[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]#[fg=#cc241d,bg=#282828,bold] 1 #[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]#[fg=#282828,bg=#282828,bold] 3"
         );
+    }
+
+    #[test]
+    fn exposes_git_sync_styles() {
+        assert_eq!(git_status_style(GitSyncMode::Clean), ("#98971a", ""));
+        assert_eq!(git_status_style(GitSyncMode::Dirty), ("#fb4934", "󱓎"));
+        assert_eq!(git_status_style(GitSyncMode::NeedPush), ("#cc241d", "󰛃"));
+        assert_eq!(git_status_style(GitSyncMode::RemoteDiff), ("#d3869b", "󰛀"));
     }
 }
