@@ -1,4 +1,9 @@
+<img width="1440" height="22" alt="Στιγμιότυπο οθόνης 2026-04-22, 9 27 28 μμ" src="https://github.com/user-attachments/assets/f3e3e380-44d1-4c3b-801e-0a23b2893a9d" />
+
+
 # rustbox-tmux
+
+
 
 🚧 Work-in-progress Rust port of `jamylak/gruvbox-tmux`, which is itself a fork
 of [motaz-shokry/gruvbox-tmux](https://gitlab.com/motaz-shokry/gruvbox-tmux).
