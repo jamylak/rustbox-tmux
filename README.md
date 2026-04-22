@@ -19,8 +19,8 @@ status widgets as a runnable tmux status-right theme entrypoint.
 Current subcommands:
 
 - `help`: print usage
-- `render`: print the current static status string
-- `publish`: publish the current status into a tmux user option
+- `render [PATH]` or `render --path PATH`: print the current status string
+- `publish [PATH]` or `publish --path PATH`: publish the current status into tmux
 - `daemon`: keep the published status fresh in the background
 - `init`: configure `status-right`, publish once, and replace/start the updater
 - `stop`: disable rustbox in the current tmux server and stop its updater
@@ -43,11 +43,15 @@ Render the current status string:
 cargo run -- render
 ```
 
-Expected output:
+Example output inside a git repo:
 
 ```text
-#[fg=colour142]▒  main#[fg=colour244] | #[fg=colour214]▒  --#[fg=colour244] | #[fg=colour109]▒ 🧠 --% #[fg=colour108]💾 --%
+#[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]#[bg=#282828,fg=#98971a,bold]▒ 󰊢 #[fg=#fbf1c7,bg=#282828]main #[fg=#fbf1c7,bg=#282828,nobold,noitalics,nounderscore,nodim]#[fg=#fabd2f,bg=#282828,bold]▒ #[fg=#d79921]🧠 ■□□□ #[fg=#d79921]33% #[fg=#fbf1c7]💾 ■■■□ #[fg=#fe8019]73%
 ```
+
+The exact output varies by current path, repo state, and live CPU / RAM
+usage. If you run `render` outside a git repo, the git section is omitted and
+you only get the metrics section.
 
 Publish the current status into tmux once:
 
@@ -57,7 +61,7 @@ cargo run -- publish
 
 Expected behavior:
 
-- publishes the current status into `@rustbox_status_right`
+- publishes the current session's status into `@rustbox_status_right`
 - nudges tmux to redraw the status line once
 
 Start the background updater:
@@ -154,43 +158,47 @@ Big picture:
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│ .tmux.conf                                                          │
-│   set -g @plugin 'jamylak/rustbox-tmux'                             │
-│   run '~/.tmux/plugins/tpm/tpm'                                     │
+│ .tmux.conf                                                           │
+│   set -g @plugin 'jamylak/rustbox-tmux'                              │
+│   run '~/.tmux/plugins/tpm/tpm'                                      │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ TPM discovers the plugin and runs `~/.tmux/plugins/rustbox-tmux/    │
-│ rustbox.tmux`                                                       │
+│ TPM discovers the plugin and runs `~/.tmux/plugins/rustbox-tmux/     │
+│ rustbox.tmux`                                                        │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ rustbox.tmux                                                        │
-│ 1. check whether `target/release/rustbox-tmux` is stale            │
-│ 2. `cargo build --release` only if missing/outdated                │
-│ 3. run `rustbox-tmux init`                                         │
+│ rustbox.tmux                                                         │
+│ 1. check whether `target/release/rustbox-tmux` is stale              │
+│ 2. `cargo build --release` only if missing/outdated                  │
+│ 3. run `rustbox-tmux init`                                           │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ rustbox-tmux init                                                   │
-│ 1. set `status-right` -> `#{@rustbox_status_right}`                │
-│ 2. install tmux hooks for context changes                          │
-│ 3. publish one fresh status value immediately                      │
-│ 4. replace/start one background daemon for this tmux server        │
+│ rustbox-tmux init                                                    │
+│ 1. set `status-right` -> `#{@rustbox_status_right}`                  │
+│ 2. install tmux hooks for context changes                            │
+│ 3. replace/start one background daemon for this tmux server          │
+│ 4. best-effort publish one fresh status value immediately            │
 └──────────────────────────────────────────────────────────────────────┘
                          │                              │
                          │                              │
                          ▼                              ▼
-┌─────────────────────────────────────┐    ┌──────────────────────────┐
+┌─────────────────────────────────────┐    ┌───────────────────────────┐
 │ tmux hooks                          │    │ background daemon         │
 │ - after-select-pane                 │    │ loop every 5s             │
 │ - after-select-window               │    │ -> metrics refresh        │
-│ - after-new-window                  │    │ -> git refresh every 30s* │
-│ - after-split-window                │    └──────────────────────────┘
-│ - client-attached                   │
+│ - pane-exited                       │    │ -> per-session git        │
+│ - window-unlinked                   │    │    refresh every 30s*     │
+│ - after-new-window                  │    │ -> tmux pane-path events  │
+│ - after-split-window                │    │    trigger immediate      │
+│ - client-attached                   │    └───────────────────────────┘
+│ - client-session-changed            │
+│ - session-created                   │
 │                                     │
 │ all run: `rustbox-tmux publish`     │
 └─────────────────────────────────────┘
@@ -198,19 +206,20 @@ Big picture:
                          ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │ rustbox-tmux publish                                                │
-│ 1. ask tmux for the active pane path                                │
-│ 2. render git + forge stub + metrics                                │
-│ 3. write result into `@rustbox_status_right`                        │
-│ 4. ask tmux to redraw                                               │
+│ 1. ask tmux for the current session + pane path                     │
+│ 2. remember that path for the current tmux session                  │
+│ 3. render git + forge stub + metrics                                │
+│ 4. write result into that session's `@rustbox_status_right`         │
+│ 5. ask tmux to redraw                                               │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ tmux status line                                                    │
-│ `status-right "#{@rustbox_status_right}"`                          │
+│ tmux status line                                                     │
+│ `status-right "#{@rustbox_status_right}"`                            │
 │                                                                      │
-│ tmux redraws the already-published value instead of running a shell │
-│ script for every status-line paint.                                 │
+│ tmux redraws the already-published session value instead of running  │
+│ a shell script for every status-line paint.                          │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -227,8 +236,11 @@ Big picture:
   the daemon wakes up every 5 seconds to keep metrics fresh even if you are
   sitting in one pane.
 - git polling:
-  the daemon reuses the cached git section until `@rustbox_git_refresh_seconds`
-  expires. The default is 30 seconds.
+  the daemon reuses a per-session cached git section until
+  `@rustbox_git_refresh_seconds` expires. The default is 30 seconds.
+- pane cwd changes:
+  the daemon also subscribes to tmux pane-path events, so plain shell `cd`
+  changes can trigger an immediate publish without waiting for the next poll.
 - status redraw:
   tmux only reads `#{@rustbox_status_right}`. It does not run `cargo`, the
   loader script, or a widget shell script on every redraw.
@@ -267,7 +279,12 @@ Warm path  ⏱
 
 Warm path  🐙
   every 30s by default
-    -> daemon git refresh for the current path
+    -> daemon git refresh for remembered session paths
+
+Warm path  🎯
+  tmux pane cwd change
+    -> subscription event
+    -> immediate session publish
 
 Hot path   ⚡
   tmux redraw
@@ -297,12 +314,15 @@ Current refresh triggers:
 - pane or window context changes:
   the installed hooks run `rustbox-tmux publish` so the status follows the
   currently focused pane path.
+- pane cwd changes inside the shell:
+  the daemon listens for tmux pane-path subscription events and can publish
+  immediately when the cwd changes.
 - idle background refresh:
   the daemon wakes up every 5 seconds so CPU/RAM numbers do not stay stale
   forever when you sit in one pane.
 - background git refresh:
-  the daemon keeps the last git section cached and only refreshes it when the
-  git interval expires. The default is 30 seconds.
+  the daemon keeps per-session git sections cached and only refreshes them
+  when the git interval expires. The default is 30 seconds.
 
 Why the explicit redraw call?
 
@@ -346,24 +366,26 @@ Per tmux server, yes.
 ```text
 one tmux server/socket
   -> one `@rustbox_daemon_pid`
-  -> one `@rustbox_status_right`
-  -> one `@rustbox_active_path`
   -> one daemon process
+  -> many tmux sessions
+      -> each session has its own `@rustbox_status_right`
+      -> each session remembers its own `@rustbox_active_path`
 ```
 
 That means:
 
 - multiple sessions inside the same tmux server share the same daemon
-- multiple windows/panes inside the same tmux server share the same published
-  status option
-- the daemon does not iterate over every repo in every pane
-- it refreshes only the single currently remembered active path
+- each session gets its own published status payload and remembered repo path
+- the daemon iterates tmux sessions and refreshes git state separately per
+  session
+- switching sessions on one server no longer stomps another session's git
+  widget
 
-This is an important current limitation:
+Current limitation:
 
-- if two clients on the same tmux server are focused on different repos, the
-  last `publish` wins
-- this is not yet a per-session or per-client status architecture
+- the isolation is per session, not per client
+- if two clients are attached to the same tmux session but focused on
+  different panes/repos, the last update for that session still wins
 
 If you use separate tmux servers via different sockets, each server can end up
 with its own daemon.
@@ -379,19 +401,19 @@ every 5s
   -> daemon refreshes metrics
 
 every 30s by default
-  -> daemon refreshes cached git section for the current path
+  -> daemon refreshes cached git sections for remembered session paths
   -> git widget shells out to `git`
 ```
 
 Also, every hook-driven `publish` and every tmux pane-path change event does an
-immediate git refresh for the current pane path.
+immediate git refresh for the affected session path.
 
 So the current design is:
 
 - not "scan every repo every 5 seconds"
 - not "run git every 5 seconds in the background"
 - but still "run git immediately on context-change hooks"
-- and "run git periodically for the current remembered path"
+- and "run git periodically for remembered session paths"
 
 That is acceptable for a small current-feature prototype, but it is one of the
 remaining inefficiencies called out above.
@@ -494,7 +516,6 @@ Optional cleanup:
 
 ```bash
 tmux set-option -gu @rustbox_daemon_pid
-tmux set-option -gu @rustbox_status_right
 ```
 
 If you only kill the pid manually, the old hooks are still there and the next
