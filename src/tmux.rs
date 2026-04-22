@@ -26,6 +26,14 @@ const LEGACY_ACTIVE_TERMINAL_ICON: &str = "@gruvbox-tmux_active_terminal_icon";
 const LEGACY_CLAUDE_ICON: &str = "@gruvbox-tmux_claude_icon";
 const LEGACY_COPILOT_ICON: &str = "@gruvbox-tmux_copilot_icon";
 const LEGACY_CODEX_ICON: &str = "@gruvbox-tmux_codex_icon";
+const CONTEXT_HOOKS: &[&str] = &[
+    "after-select-pane",
+    "after-select-window",
+    "after-new-window",
+    "after-split-window",
+    "client-attached",
+    "session-created",
+];
 
 pub fn publish_status(status: &str) -> Result<(), String> {
     set_option(STATUS_OPTION, status)
@@ -246,12 +254,6 @@ pub fn configure_theme(binary_path: &str) -> Result<(), String> {
         set_option(GIT_REFRESH_OPTION, &DEFAULT_GIT_REFRESH_SECS.to_string())?;
     }
 
-    // Guard hook installation so re-sourcing tmux config does not duplicate
-    // the same `run-shell ... publish` hook entries.
-    if show_option(HOOKS_INSTALLED_OPTION).as_deref() == Some("1") {
-        return Ok(());
-    }
-
     let publish_command = format!("run-shell -b \"{binary_path} publish\"");
     // Hook map:
     // - `after-select-pane`   : user focused a different pane
@@ -259,14 +261,14 @@ pub fn configure_theme(binary_path: &str) -> Result<(), String> {
     // - `after-new-window`    : a new window appeared with a new cwd/context
     // - `after-split-window`  : a new pane appeared with a new cwd/context
     // - `client-attached`     : seed status when a client first attaches
+    // - `session-created`     : a brand-new `tmux new-session -c ...` picked
+    //                           its initial cwd before any later daemon tick
     //
     // All of them do the same thing:
     // context changed -> run `publish` -> refresh `@rustbox_status_right`
-    append_hook("after-select-pane", &publish_command)?;
-    append_hook("after-select-window", &publish_command)?;
-    append_hook("after-new-window", &publish_command)?;
-    append_hook("after-split-window", &publish_command)?;
-    append_hook("client-attached", &publish_command)?;
+    for hook in CONTEXT_HOOKS {
+        ensure_hook_contains_command(hook, &publish_command)?;
+    }
     set_option(HOOKS_INSTALLED_OPTION, "1")
 }
 
@@ -308,6 +310,36 @@ fn append_hook(name: &str, command: &str) -> Result<(), String> {
             "tmux set-hook for {name} exited with status {status}"
         ))
     }
+}
+
+// Re-sourcing tmux config should pick up newly added rustbox hooks, but it
+// should not append the exact same `publish` command forever. We check first so
+// old servers can migrate forward while repeat `init` calls stay idempotent.
+fn ensure_hook_contains_command(name: &str, command: &str) -> Result<(), String> {
+    if hook_contains_command(name, command)? {
+        Ok(())
+    } else {
+        append_hook(name, command)
+    }
+}
+
+// Ask tmux for the current global hook body and look for the exact rustbox
+// command we care about. Missing hooks are normal on first install, so a tmux
+// failure here means "not installed yet" rather than a hard error.
+fn hook_contains_command(name: &str, command: &str) -> Result<bool, String> {
+    let output = Command::new("tmux")
+        .args(["show-hooks", "-g", name])
+        .output()
+        .map_err(|error| format!("failed to run tmux show-hooks for {name}: {error}"))?;
+
+    if !output.status.success() {
+        return Ok(false);
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| format!("tmux show-hooks for {name} returned invalid UTF-8: {error}"))?;
+
+    Ok(stdout.lines().any(|line| line.contains(command)))
 }
 
 fn status_left_format() -> String {
@@ -444,10 +476,10 @@ fn build_icon_rule(pattern: &str, icon: &str, fallback: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_app_icon_format, build_number_format, current_session_id, refresh_args,
-        set_option_args, status_left_format, theme_enabled, ACTIVE_PATH_OPTION,
-        DAEMON_PID_OPTION, DEFAULT_GIT_REFRESH_SECS, ENABLED_OPTION, GIT_REFRESH_OPTION,
-        STATUS_OPTION,
+        build_app_icon_format, build_number_format, current_session_id, hook_contains_command,
+        refresh_args, set_option_args, status_left_format, theme_enabled, ACTIVE_PATH_OPTION,
+        CONTEXT_HOOKS, DAEMON_PID_OPTION, DEFAULT_GIT_REFRESH_SECS, ENABLED_OPTION,
+        GIT_REFRESH_OPTION, STATUS_OPTION,
     };
 
     #[test]
@@ -509,5 +541,16 @@ mod tests {
             status_left_format(),
             "#[fg=#fbf1c7,bg=#458588,bold] #{?client_prefix,🚀 ,#{?pane_in_mode,👀 ,🔮 }}#[bold,nodim]#S "
         );
+    }
+
+    #[test]
+    fn installs_session_created_among_context_hooks() {
+        assert!(CONTEXT_HOOKS.contains(&"session-created"));
+        assert!(CONTEXT_HOOKS.contains(&"client-attached"));
+    }
+
+    #[test]
+    fn missing_hook_is_treated_as_not_installed() {
+        assert!(!hook_contains_command("rustbox-hook-that-does-not-exist", "publish").unwrap());
     }
 }
