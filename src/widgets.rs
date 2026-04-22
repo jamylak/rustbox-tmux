@@ -154,10 +154,15 @@ fn macos_ram_percent() -> Option<u8> {
     let wired = parse_vm_stat_count(&vm_stat_output, "Pages wired down")?;
     let compressed = parse_vm_stat_count(&vm_stat_output, "Pages occupied by compressor")?;
 
-    let used_bytes = (active + inactive + wired + compressed).saturating_mul(page_size);
-    let total_bytes = used_bytes + (free + speculative).saturating_mul(page_size);
-
-    percent_from_used_total(used_bytes, total_bytes)
+    macos_ram_percent_from_pages(
+        page_size,
+        active,
+        inactive,
+        wired,
+        compressed,
+        speculative,
+        free,
+    )
 }
 
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
@@ -219,6 +224,29 @@ fn parse_macos_cpu_field(line: &str, suffix: &str) -> Option<f64> {
         .map(|(_, value)| value)
         .unwrap_or(&line[..end]);
     value.trim().parse().ok()
+}
+
+fn macos_ram_percent_from_pages(
+    page_size: u64,
+    active: u64,
+    inactive: u64,
+    wired: u64,
+    compressed: u64,
+    speculative: u64,
+    free: u64,
+) -> Option<u8> {
+    // Match the old shell theme:
+    //
+    // used  = active + wired + compressed
+    // total = active + wired + compressed + inactive + speculative + free
+    //
+    // `inactive` memory is available for reuse, so counting it as already-used
+    // badly overstates pressure on macOS.
+    let used_bytes = (active + wired + compressed).saturating_mul(page_size);
+    let total_bytes =
+        (active + wired + compressed + inactive + speculative + free).saturating_mul(page_size);
+
+    percent_from_used_total(used_bytes, total_bytes)
 }
 
 fn parse_diff_numstat(diff_numstat: &str) -> (u32, u32, u32) {
@@ -287,10 +315,11 @@ fn usage_blocks(percent: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_percent, forge_section, format_git_section, git_section_string, meminfo_value_kib,
-        metrics_section_string, parse_diff_numstat, parse_macos_top_cpu_percent,
-        parse_vm_stat_count, parse_vm_stat_page_size, percent_from_used_total, truncate_branch,
-        GitSnapshot, FORGE_SECTION_STUB, SHOW_FORGE_SECTION,
+        clamp_percent, forge_section, format_git_section, git_section_string,
+        macos_ram_percent_from_pages, meminfo_value_kib, metrics_section_string,
+        parse_diff_numstat, parse_macos_top_cpu_percent, parse_vm_stat_count,
+        parse_vm_stat_page_size, percent_from_used_total, truncate_branch, GitSnapshot,
+        FORGE_SECTION_STUB, SHOW_FORGE_SECTION,
     };
 
     #[test]
@@ -329,6 +358,14 @@ mod tests {
         let sample = "Processes: 520 total, 2 running, 518 sleeping, 2484 threads\nCPU usage: 4.34% user, 11.11% sys, 84.54% idle\n";
 
         assert_eq!(parse_macos_top_cpu_percent(sample), Some(15));
+    }
+
+    #[test]
+    fn computes_macos_ram_like_the_old_theme() {
+        assert_eq!(
+            macos_ram_percent_from_pages(1, 200, 300, 100, 50, 25, 25),
+            Some(50)
+        );
     }
 
     #[test]
